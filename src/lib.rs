@@ -37,6 +37,8 @@ mod multi_extract;
 pub use multi_extract::*;
 mod size;
 pub use size::*;
+mod pathsum;
+pub use pathsum::*;
 
 // Sugar modules using parse-time macros
 mod sugar;
@@ -54,6 +56,9 @@ pub fn new_experimental_egraph() -> EGraph {
     // Support for set cost
     add_set_cost(&mut egraph);
     egraph.add_read_primitive(GetSizePrimitive, None);
+
+    // Register the PathSum custom Sort for our exact Hash-Joins
+    add_base_sort(&mut egraph, PathSumSort, span!()).unwrap();
 
     // unstable-fresh! macro
     egraph
@@ -80,4 +85,34 @@ pub fn experimental_parser() -> Parser {
     parser.add_command_macro(Arc::new(sugar::For));
     parser.add_command_macro(Arc::new(sugar::WithRuleset));
     parser
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pathsum_addon_recognition() {
+        let mut eg = new_experimental_egraph();
+        
+        let program = r#"
+            ;; 1. Check if the engine recognizes the custom Sort "PathSum"
+            ;; If PathSumSort wasn't registered, this will panic.
+            (function test-pathsum-table (i64) PathSum :merge old)
+            
+            ;; 2. Create dummy inputs to feed into the primitive
+            (function dummy-ps (i64) PathSum :merge old)
+
+            ;; 3. Force the engine to typecheck the primitive inside a rule.
+            ;; The rule won't actually fire because there's no data, but it will 
+            ;; successfully compile and verify the primitive's type signature!
+            (rule ((= a (dummy-ps 1))
+                   (= b (dummy-ps 2)))
+                  ((let test-evaluation (combine-pathsum a b))))
+        "#;
+        
+        if let Err(e) = eg.parse_and_run_program(None, program) {
+            panic!("Egglog engine failed!\nDetailed Error:\n{:#?}", e);
+        }
+    }
 }
