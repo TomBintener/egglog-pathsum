@@ -212,4 +212,50 @@ mod tests {
         // Ensure they correctly evaluated to different matrices!
         assert_ne!(x_z.data, z_x.data, "X*Z should NOT equal Z*X");
     }
+
+    #[test]
+    fn test_matrix_multiplication_throughput() {
+        use std::time::Instant;
+        use std::hint::black_box;
+
+        let iterations = 100_000;
+
+        // 1. Benchmark 2x2 Matrices (e.g., X gate)
+        let x_gate = constant_gate(2, 2, &[0, 1, 1, 0]);
+        let mut current_2x2 = x_gate.clone();
+        
+        let start_2x2 = Instant::now();
+        for _ in 0..iterations {
+            // black_box prevents the compiler from optimizing the loop away
+            current_2x2 = combine_pathsum_logic(black_box(current_2x2), black_box(x_gate.clone()));
+        }
+        let duration_2x2 = start_2x2.elapsed();
+        let ops_per_sec_2x2 = (iterations as f64) / duration_2x2.as_secs_f64();
+
+        // 2. Benchmark 4x4 Matrices (e.g., CX gate)
+        let cx_gate = constant_gate(4, 4, &[
+            1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 0, 1,  0, 0, 1, 0,
+        ]);
+        let mut current_4x4 = cx_gate.clone();
+
+        let start_4x4 = Instant::now();
+        for _ in 0..iterations {
+            current_4x4 = combine_pathsum_logic(black_box(current_4x4), black_box(cx_gate.clone()));
+        }
+        let duration_4x4 = start_4x4.elapsed();
+        let ops_per_sec_4x4 = (iterations as f64) / duration_4x4.as_secs_f64();
+
+        // Print results to stdout
+        println!("\n--- Performance Test Results ({} iterations) ---", iterations);
+        println!("2x2 Matrix Throughput: {:.2} ops/sec", ops_per_sec_2x2);
+        println!("2x2 Time per mult:     {:?}", duration_2x2 / iterations);
+        println!("--------------------------------------------------");
+        println!("4x4 Matrix Throughput: {:.2} ops/sec", ops_per_sec_4x4);
+        println!("4x4 Time per mult:     {:?}", duration_4x4 / iterations);
+        println!("--------------------------------------------------\n");
+
+        // Use the final values so the compiler doesn't throw them out
+        assert_eq!(current_2x2.rows, 2);
+        assert_eq!(current_4x4.rows, 4);
+    }
 }
