@@ -40,6 +40,8 @@ pub use size::*;
 
 // Sugar modules using parse-time macros
 mod sugar;
+mod pathsum;
+
 pub use sugar::*;
 
 pub fn new_experimental_egraph() -> EGraph {
@@ -51,9 +53,13 @@ pub fn new_experimental_egraph() -> EGraph {
     // Rational support
     add_base_sort(&mut egraph, RationalSort, span!()).unwrap();
 
+    // PathSum native matrix math support
+    add_base_sort(&mut egraph, crate::pathsum::PathSumSort, span!()).unwrap();
+
+
     // Support for set cost
     add_set_cost(&mut egraph);
-    egraph.add_read_primitive(GetSizePrimitive, None);
+    egraph.add_primitive(GetSizePrimitive);
 
     // unstable-fresh! macro
     egraph
