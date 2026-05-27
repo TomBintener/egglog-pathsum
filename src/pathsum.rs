@@ -7,6 +7,19 @@ use super::*;
 // A large prime for our Finite Field (2^61 - 1)
 const PRIME: u64 = 2305843009213693951; 
 
+// Helper function for ultra-fast modulo arithmetic for Mersenne Prime 2^61 - 1
+// Replaces slow hardware division (%) with lightning-fast bitwise shifts
+#[inline(always)]
+fn fast_mod(mut v: u128) -> u64 {
+    const PRIME_U128: u128 = 2305843009213693951;
+    v = (v & PRIME_U128) + (v >> 61);
+    v = (v & PRIME_U128) + (v >> 61);
+    if v >= PRIME_U128 {
+        v -= PRIME_U128;
+    }
+    v as u64
+}
+
 // A complex number over our Finite Field
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComplexModP {
@@ -22,25 +35,38 @@ impl ComplexModP {
     // (a + bi) * (c + di) = (ac - bd) + (ad + bc)i
     #[inline(always)]
     fn mul_mod(self, other: Self) -> Self {
-        let ac = (self.real as u128 * other.real as u128) % (PRIME as u128);
-        let bd = (self.imag as u128 * other.imag as u128) % (PRIME as u128);
-        let ad = (self.real as u128 * other.imag as u128) % (PRIME as u128);
-        let bc = (self.imag as u128 * other.real as u128) % (PRIME as u128);
+        let ac = self.real as u128 * other.real as u128;
+        let bd = self.imag as u128 * other.imag as u128;
+        let ad_bc = self.real as u128 * other.imag as u128 + self.imag as u128 * other.real as u128;
         
-        // To safely do (ac - bd) mod P, we add P before subtracting to prevent underflow
-        let real = (ac + (PRIME as u128) - bd) % (PRIME as u128);
-        let imag = (ad + bc) % (PRIME as u128);
+        let r_pos = fast_mod(ac);
+        let r_neg = fast_mod(bd);
         
-        ComplexModP { real: real as u64, imag: imag as u64 }
+        let real = if r_pos >= r_neg { r_pos - r_neg } else { PRIME + r_pos - r_neg };
+        
+        ComplexModP { real, imag: fast_mod(ad_bc) }
     }
 
     #[inline(always)]
     fn add_mod(self, other: Self) -> Self {
-        ComplexModP {
-            real: (self.real + other.real) % PRIME,
-            imag: (self.imag + other.imag) % PRIME,
-        }
+        let mut real = self.real + other.real;
+        if real >= PRIME { real -= PRIME; }
+        
+        let mut imag = self.imag + other.imag;
+        if imag >= PRIME { imag -= PRIME; }
+        
+        ComplexModP { real, imag }
     }
+}
+
+impl std::ops::Add for ComplexModP {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output { self.add_mod(rhs) }
+}
+
+impl std::ops::Mul for ComplexModP {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self::Output { self.mul_mod(rhs) }
 }
 
 // 1. Define the exact integer data structure
@@ -49,6 +75,7 @@ impl ComplexModP {
 pub struct EvaluatedPathSum {
     pub rows: usize,
     pub cols: usize,
+    pub qubits: SmallVec<[i64; 4]>,
     pub data: SmallVec<[ComplexModP; 16]>,
 }
 
@@ -61,23 +88,45 @@ pub struct PathSumSort;
 // Extracting this avoids `add_primitive!` macro parsing errors with semicolons
 fn combine_pathsum_logic(a: PSum, b: PSum) -> PSum {
     assert_eq!(a.cols, b.rows, "Matrix dimension mismatch: {}x{} * {}x{}", a.rows, a.cols, b.rows, b.cols);
+    
+    // Safety check: Ensure we are multiplying matrices on the exact same qubits!
+    assert_eq!(a.qubits, b.qubits, "Cannot directly multiply matrices on different qubit sets! Qubits must be aligned first.");
 
     let mut result_data = smallvec![ComplexModP::ZERO; a.rows * b.cols];
     for i in 0..a.rows {
         for j in 0..b.cols {
-            let mut sum = ComplexModP::ZERO;
+            let mut real_pos: u128 = 0;
+            let mut real_neg: u128 = 0;
+            let mut imag_pos: u128 = 0;
+            
             for k in 0..a.cols {
                 let val_a = a.data[i * a.cols + k];
                 let val_b = b.data[k * b.cols + j];
-                sum = sum.add_mod(val_a.mul_mod(val_b));
+                
+                real_pos += val_a.real as u128 * val_b.real as u128;
+                real_neg += val_a.imag as u128 * val_b.imag as u128;
+                imag_pos += val_a.real as u128 * val_b.imag as u128 + val_a.imag as u128 * val_b.real as u128;
+                
+                // Prevent u128 overflow for matrices larger than 16x16 (4 qubits)
+                if (k & 15) == 15 {
+                    real_pos = fast_mod(real_pos) as u128;
+                    real_neg = fast_mod(real_neg) as u128;
+                    imag_pos = fast_mod(imag_pos) as u128;
+                }
             }
-            result_data[i * b.cols + j] = sum;
+            
+            let r_pos = fast_mod(real_pos);
+            let r_neg = fast_mod(real_neg);
+            let real = if r_pos >= r_neg { r_pos - r_neg } else { PRIME + r_pos - r_neg };
+            
+            result_data[i * b.cols + j] = ComplexModP { real, imag: fast_mod(imag_pos) };
         }
     }
 
     PSum::new(EvaluatedPathSum {
         rows: a.rows,
         cols: b.cols,
+        qubits: a.qubits.clone(),
         data: result_data,
     })
 }
@@ -85,17 +134,34 @@ fn combine_pathsum_logic(a: PSum, b: PSum) -> PSum {
 // Helper function for Tensor (Kronecker) Product of two matrices
 // Used when gates are applied in parallel on different qubits
 fn tensor_pathsum_logic(a: PSum, b: PSum) -> PSum {
-    let rows = a.rows * b.rows;
-    let cols = a.cols * b.cols;
+    // Enforce a canonical order to ensure that tensor(A, B) == tensor(B, A)
+    // This is critical for the e-graph to recognize equivalent parallel operations.
+    let (first, second) = if a.qubits.iter().min() < b.qubits.iter().min() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+
+    // Safety check: Ensure qubit sets are disjoint.
+    for q_a in first.qubits.iter() {
+        assert!(!second.qubits.contains(q_a), "Cannot tensor matrices with overlapping qubits: {:?} and {:?}", first.qubits, second.qubits);
+    }
+
+    let rows = first.rows * second.rows;
+    let cols = first.cols * second.cols;
+    
+    let mut new_qubits = first.qubits.clone();
+    new_qubits.extend_from_slice(&second.qubits);
+
     let mut result_data = smallvec![ComplexModP::ZERO; rows * cols];
 
-    for i in 0..a.rows {
-        for j in 0..a.cols {
-            let val_a = a.data[i * a.cols + j];
-            for k in 0..b.rows {
-                for l in 0..b.cols {
-                    let val_b = b.data[k * b.cols + l];
-                    result_data[(i * b.rows + k) * cols + (j * b.cols + l)] = val_a.mul_mod(val_b);
+    for i in 0..first.rows {
+        for j in 0..first.cols {
+            let val_a = first.data[i * first.cols + j];
+            for k in 0..second.rows {
+                for l in 0..second.cols {
+                    let val_b = second.data[k * second.cols + l];
+                    result_data[(i * second.rows + k) * cols + (j * second.cols + l)] = val_a * val_b;
                 }
             }
         }
@@ -103,12 +169,13 @@ fn tensor_pathsum_logic(a: PSum, b: PSum) -> PSum {
     PSum::new(EvaluatedPathSum {
         rows,
         cols,
+        qubits: new_qubits,
         data: result_data,
     })
 }
 
 // Helper function for quickly creating constant gate matrices
-fn constant_gate(rows: usize, cols: usize, data: &[u64]) -> PSum {
+fn constant_gate(rows: usize, cols: usize, qubits: &[i64], data: &[u64]) -> PSum {
     let complex_data: SmallVec<[ComplexModP; 16]> = data.iter().map(|&val| ComplexModP {
         real: val,
         imag: 0,
@@ -117,6 +184,7 @@ fn constant_gate(rows: usize, cols: usize, data: &[u64]) -> PSum {
     PSum::new(EvaluatedPathSum {
         rows,
         cols,
+        qubits: SmallVec::from_slice(qubits),
         data: complex_data,
     })
 }
@@ -142,21 +210,21 @@ impl BaseSort for PathSumSort {
         });
         
         // Constant Base Cases
-        add_primitive!(eg, "id-pathsum" = | | -> PSum {
-            constant_gate(2, 2, &[1, 0, 0, 1])
+        add_primitive!(eg, "id-pathsum" = |q: i64| -> PSum {
+            constant_gate(2, 2, &[q], &[1, 0, 0, 1])
         });
 
-        add_primitive!(eg, "x-pathsum" = | | -> PSum {
-            constant_gate(2, 2, &[0, 1, 1, 0])
+        add_primitive!(eg, "x-pathsum" = |q: i64| -> PSum {
+            constant_gate(2, 2, &[q], &[0, 1, 1, 0])
         });
 
-        add_primitive!(eg, "z-pathsum" = | | -> PSum {
+        add_primitive!(eg, "z-pathsum" = |q: i64| -> PSum {
             // In a Finite Field, -1 is represented as (PRIME - 1)
-            constant_gate(2, 2, &[1, 0, 0, PRIME - 1])
+            constant_gate(2, 2, &[q], &[1, 0, 0, PRIME - 1])
         });
 
-        add_primitive!(eg, "cx-pathsum" = | | -> PSum {
-            constant_gate(4, 4, &[
+        add_primitive!(eg, "cx-pathsum" = |qc: i64, qt: i64| -> PSum {
+            constant_gate(4, 4, &[qc, qt], &[
                 1, 0, 0, 0,
                 0, 1, 0, 0,
                 0, 0, 0, 1,
@@ -197,16 +265,16 @@ mod tests {
     #[test]
     fn test_gate_matrix_multiplication() {
         // Generate our base gates
-        let id = constant_gate(2, 2, &[1, 0, 0, 1]);
-        let x = constant_gate(2, 2, &[0, 1, 1, 0]);
-        let z = constant_gate(2, 2, &[1, 0, 0, PRIME - 1]);
-        let cx = constant_gate(4, 4, &[
+        let id = constant_gate(2, 2, &[0], &[1, 0, 0, 1]);
+        let x = constant_gate(2, 2, &[0], &[0, 1, 1, 0]);
+        let z = constant_gate(2, 2, &[0], &[1, 0, 0, PRIME - 1]);
+        let cx = constant_gate(4, 4, &[0, 1], &[
             1, 0, 0, 0,
             0, 1, 0, 0,
             0, 0, 0, 1,
             0, 0, 1, 0,
         ]);
-        let id4 = constant_gate(4, 4, &[
+        let id4 = constant_gate(4, 4, &[0, 1], &[
             1, 0, 0, 0,
             0, 1, 0, 0,
             0, 0, 1, 0,
@@ -238,15 +306,29 @@ mod tests {
         let z_x = combine_pathsum_logic(z.clone(), x.clone());
         
         // X*Z = [0, -1; 1, 0] (Using PRIME - 1 for -1)
-        let expected_xz = constant_gate(2, 2, &[0, PRIME - 1, 1, 0]);
+        let expected_xz = constant_gate(2, 2, &[0], &[0, PRIME - 1, 1, 0]);
         assert_eq!(x_z.data, expected_xz.data, "X * Z matrix is mathematically incorrect");
 
         // Z*X = [0, 1; -1, 0] (Using PRIME - 1 for -1)
-        let expected_zx = constant_gate(2, 2, &[0, 1, PRIME - 1, 0]);
+        let expected_zx = constant_gate(2, 2, &[0], &[0, 1, PRIME - 1, 0]);
         assert_eq!(z_x.data, expected_zx.data, "Z * X matrix is mathematically incorrect");
         
         // Ensure they correctly evaluated to different matrices!
         assert_ne!(x_z.data, z_x.data, "X*Z should NOT equal Z*X");
+    }
+
+    #[test]
+    fn test_canonical_tensor_product() {
+        let x0 = constant_gate(2, 2, &[0], &[0, 1, 1, 0]);
+        let z1 = constant_gate(2, 2, &[1], &[1, 0, 0, PRIME - 1]);
+
+        // Test that tensor(X(0), Z(1)) produces the same result as tensor(Z(1), X(0))
+        let xz_tensor = tensor_pathsum_logic(x0.clone(), z1.clone());
+        let zx_tensor = tensor_pathsum_logic(z1.clone(), x0.clone());
+
+        assert_eq!(xz_tensor.qubits, zx_tensor.qubits, "Canonical qubit ordering failed");
+        assert_eq!(xz_tensor.data, zx_tensor.data, "Tensor product result should be identical regardless of argument order");
+        assert_eq!(xz_tensor.qubits.as_slice(), &[0, 1], "Qubits should be sorted");
     }
 
     #[test]
@@ -257,7 +339,7 @@ mod tests {
         let iterations = 100_000;
 
         // 1. Benchmark 2x2 Matrices (e.g., X gate)
-        let x_gate = constant_gate(2, 2, &[0, 1, 1, 0]);
+        let x_gate = constant_gate(2, 2, &[0], &[0, 1, 1, 0]);
         let mut current_2x2 = x_gate.clone();
         
         let start_2x2 = Instant::now();
@@ -269,7 +351,7 @@ mod tests {
         let ops_per_sec_2x2 = (iterations as f64) / duration_2x2.as_secs_f64();
 
         // 2. Benchmark 4x4 Matrices (e.g., CX gate)
-        let cx_gate = constant_gate(4, 4, &[
+        let cx_gate = constant_gate(4, 4, &[0, 1], &[
             1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 0, 1,  0, 0, 1, 0,
         ]);
         let mut current_4x4 = cx_gate.clone();
@@ -293,5 +375,32 @@ mod tests {
         // Use the final values so the compiler doesn't throw them out
         assert_eq!(current_2x2.rows, 2);
         assert_eq!(current_4x4.rows, 4);
+    }
+
+    #[test]
+    fn test_qubit_awareness() {
+        // 1. Create two identical gates on different qubits
+        let x_on_q0 = constant_gate(2, 2, &[0], &[0, 1, 1, 0]);
+        let x_on_q1 = constant_gate(2, 2, &[1], &[0, 1, 1, 0]);
+
+        // 2. Assert they are NOT equal because their qubit lists differ.
+        // This proves the `qubits` field is part of the Hash and Eq implementations.
+        assert_ne!(x_on_q0, x_on_q1, "Gates on different qubits should not be equal");
+
+        // 3. Assert that attempting to multiply gates on different qubits panics.
+        // This verifies the safety check in `combine_pathsum_logic`.
+        
+        // Temporarily suppress the panic output so it doesn't pollute our test logs
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let result = std::panic::catch_unwind(|| {
+            combine_pathsum_logic(x_on_q0, x_on_q1);
+        });
+
+        // Restore the standard panic hook immediately after
+        std::panic::set_hook(prev_hook);
+
+        assert!(result.is_err(), "Multiplying matrices on different qubits should panic");
     }
 }
