@@ -24,6 +24,8 @@ egglog-reports = { git = "https://github.com/egraphs-good/egglog.git", rev = "d3
 num = "0.4.3"
 lazy_static = "1.4"
 log = "0.4"
+smallvec = "1.13"
+
 
 [dev-dependencies]
 glob = "0.3.1"

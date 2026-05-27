@@ -1,6 +1,7 @@
 use egglog::prelude::BaseSort;
 use egglog::sort::{BaseValues, Boxed};
 use crate::ast::Literal;
+use smallvec::{smallvec, SmallVec};
 use super::*;
 
 // A large prime for our Finite Field (2^61 - 1)
@@ -14,6 +15,9 @@ pub struct ComplexModP {
 }
 
 impl ComplexModP {
+    pub const ZERO: Self = Self { real: 0, imag: 0 };
+    pub const ONE: Self = Self { real: 1, imag: 0 };
+
     // Helper for exact modular multiplication of two complex numbers
     // (a + bi) * (c + di) = (ac - bd) + (ad + bc)i
     #[inline(always)]
@@ -45,7 +49,7 @@ impl ComplexModP {
 pub struct EvaluatedPathSum {
     pub rows: usize,
     pub cols: usize,
-    pub data: Vec<ComplexModP>, 
+    pub data: SmallVec<[ComplexModP; 16]>,
 }
 
 pub type PSum = Boxed<EvaluatedPathSum>;
@@ -56,11 +60,12 @@ pub struct PathSumSort;
 // Helper function for matrix multiplication over F_p
 // Extracting this avoids `add_primitive!` macro parsing errors with semicolons
 fn combine_pathsum_logic(a: PSum, b: PSum) -> PSum {
-    let mut result_data = vec![ComplexModP { real: 0, imag: 0 }; a.rows * b.cols];
-    
+    assert_eq!(a.cols, b.rows, "Matrix dimension mismatch: {}x{} * {}x{}", a.rows, a.cols, b.rows, b.cols);
+
+    let mut result_data = smallvec![ComplexModP::ZERO; a.rows * b.cols];
     for i in 0..a.rows {
         for j in 0..b.cols {
-            let mut sum = ComplexModP { real: 0, imag: 0 };
+            let mut sum = ComplexModP::ZERO;
             for k in 0..a.cols {
                 let val_a = a.data[i * a.cols + k];
                 let val_b = b.data[k * b.cols + j];
@@ -77,9 +82,34 @@ fn combine_pathsum_logic(a: PSum, b: PSum) -> PSum {
     })
 }
 
+// Helper function for Tensor (Kronecker) Product of two matrices
+// Used when gates are applied in parallel on different qubits
+fn tensor_pathsum_logic(a: PSum, b: PSum) -> PSum {
+    let rows = a.rows * b.rows;
+    let cols = a.cols * b.cols;
+    let mut result_data = smallvec![ComplexModP::ZERO; rows * cols];
+
+    for i in 0..a.rows {
+        for j in 0..a.cols {
+            let val_a = a.data[i * a.cols + j];
+            for k in 0..b.rows {
+                for l in 0..b.cols {
+                    let val_b = b.data[k * b.cols + l];
+                    result_data[(i * b.rows + k) * cols + (j * b.cols + l)] = val_a.mul_mod(val_b);
+                }
+            }
+        }
+    }
+    PSum::new(EvaluatedPathSum {
+        rows,
+        cols,
+        data: result_data,
+    })
+}
+
 // Helper function for quickly creating constant gate matrices
 fn constant_gate(rows: usize, cols: usize, data: &[u64]) -> PSum {
-    let complex_data: Vec<ComplexModP> = data.iter().map(|&val| ComplexModP {
+    let complex_data: SmallVec<[ComplexModP; 16]> = data.iter().map(|&val| ComplexModP {
         real: val,
         imag: 0,
     }).collect();
@@ -101,8 +131,14 @@ impl BaseSort for PathSumSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         // The exact modular arithmetic primitive for combining sequences
+        // IMPORTANT: We flip `a` and `b` because a sequence `then(A, B)` evaluates as B * A
         add_primitive!(eg, "combine-pathsum" = |a: PSum, b: PSum| -> PSum { 
-            combine_pathsum_logic(a, b) 
+            combine_pathsum_logic(b, a) 
+        });
+
+        // Primitive for parallel gates
+        add_primitive!(eg, "tensor-pathsum" = |a: PSum, b: PSum| -> PSum { 
+            tensor_pathsum_logic(a, b) 
         });
         
         // Constant Base Cases

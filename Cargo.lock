@@ -452,6 +452,7 @@ dependencies = [
  "libtest-mimic",
  "log",
  "num",
+ "smallvec",
 ]
 
 [[package]]
