@@ -41,6 +41,7 @@ pub use size::*;
 // Sugar modules using parse-time macros
 mod sugar;
 mod pathsum;
+pub mod canonical_phase_poly;
 
 pub use sugar::*;
 
