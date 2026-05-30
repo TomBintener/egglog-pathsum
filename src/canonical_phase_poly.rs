@@ -71,6 +71,41 @@ impl CanonicalPhasePoly {
         result.extend_from_slice(&other.terms[j..]);
         self.terms = result;
     }
+
+    /// Ingests a raw, unsorted batch of terms, compacts them, and merges them in O(K log K + M)
+    pub fn merge_unsorted_batch(&mut self, mut batch: Vec<PackedPhaseTerm>) {
+        if batch.is_empty() { return; }
+
+        // 1. Sort using Rust's fastest unstable sort
+        batch.sort_unstable();
+
+        // 2. Compact duplicates modulo 8 in-place
+        let mut compacted = SmallVec::<[PackedPhaseTerm; 16]>::new();
+        if batch.is_empty() {
+            return;
+        }
+        let mut current_mono = batch[0].monomial();
+        let mut current_phase = batch[0].phase();
+
+        for term in batch.into_iter().skip(1) {
+            if term.monomial() == current_mono {
+                current_phase = (current_phase + term.phase()) % 8;
+            } else {
+                if current_phase != 0 {
+                    compacted.push(PackedPhaseTerm::create(current_mono, current_phase));
+                }
+                current_mono = term.monomial();
+                current_phase = term.phase();
+            }
+        }
+        if current_phase != 0 {
+            compacted.push(PackedPhaseTerm::create(current_mono, current_phase));
+        }
+
+        // 3. Single O(N+M) merge into the main polynomial
+        let batch_poly = CanonicalPhasePoly { terms: compacted };
+        self.add_assign(&batch_poly);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -117,7 +152,6 @@ pub struct EvaluatedPathSum {
     pub out_state: Vec<BooleanPoly>,
     pub phase_poly: CanonicalPhasePoly,
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -166,7 +200,8 @@ mod tests {
         let term1 = PackedPhaseTerm::create(1, 2);
         let term2 = PackedPhaseTerm::create(1, 3);
         
-        assert_eq!(term1.cmp(&term2) == Ordering::Equal, term1 == term2, "Ord and PartialEq must agree");
+        assert_ne!(term1.cmp(&term2), Ordering::Equal);
+        assert_ne!(term1, term2);
     }
 
     /// Tests the crucial property that identical terms with opposing phases
@@ -399,5 +434,42 @@ mod tests {
 
         poly_c.add_assign(&poly_d);
         assert_eq!(poly_c.terms.as_slice(), &[1, 2]);
+    }
+
+    /// Tests the `merge_unsorted_batch` method to ensure it correctly sorts,
+    /// compacts, and merges a raw vector of phase terms.
+    #[test]
+    fn test_merge_unsorted_batch() {
+        let mut poly = CanonicalPhasePoly {
+            terms: smallvec![
+                PackedPhaseTerm::create(1, 1),
+                PackedPhaseTerm::create(4, 3),
+            ],
+        };
+
+        let batch = vec![
+            PackedPhaseTerm::create(10, 1), // New term
+            PackedPhaseTerm::create(1, 2),  // Collides with existing
+            PackedPhaseTerm::create(5, 7),  // New term, out of order
+            PackedPhaseTerm::create(1, 5),  // Collides with existing and self
+        ];
+
+        poly.merge_unsorted_batch(batch);
+
+        // Expected result:
+        // Original: (1, 1), (4, 3)
+        // Batch compacts to: (1, 7), (5, 7), (10, 1)
+        // Merged:
+        // mono 1: 1 + 7 = 8 -> 0 (drops)
+        // mono 4: 3
+        // mono 5: 7
+        // mono 10: 1
+        let expected = vec![
+            PackedPhaseTerm::create(4, 3),
+            PackedPhaseTerm::create(5, 7),
+            PackedPhaseTerm::create(10, 1),
+        ];
+
+        assert_eq!(poly.terms.as_slice(), expected.as_slice());
     }
 }

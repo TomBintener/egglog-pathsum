@@ -21,10 +21,11 @@
 //! The rest of this crate exposes the Rust APIs and helpers that back these extensions.
 //!
 use egglog::ast::Parser;
-use egglog::prelude::{RustSpan, Span, add_base_sort};
+use egglog::prelude::{add_base_sort, RustSpan, Span};
 pub use egglog::*;
 use std::sync::Arc;
 
+pub mod canonical_phase_poly;
 pub mod rational;
 pub use rational::*;
 mod scheduling;
@@ -39,9 +40,9 @@ mod size;
 pub use size::*;
 
 // Sugar modules using parse-time macros
+mod evaluator;
 mod sugar;
 mod pathsum;
-pub mod canonical_phase_poly;
 
 pub use sugar::*;
 
@@ -56,7 +57,6 @@ pub fn new_experimental_egraph() -> EGraph {
 
     // PathSum native matrix math support
     add_base_sort(&mut egraph, crate::pathsum::PathSumSort, span!()).unwrap();
-
 
     // Support for set cost
     add_set_cost(&mut egraph);
