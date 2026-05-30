@@ -41,6 +41,7 @@ pub use size::*;
 
 // Sugar modules using parse-time macros
 mod evaluator;
+mod reduction;
 mod sugar;
 mod pathsum;
 
