@@ -35,6 +35,7 @@ impl Ord for PackedPhaseTerm {
     #[inline(always)]
     fn cmp(&self, other: &Self) -> Ordering {
         self.monomial().cmp(&other.monomial())
+            .then_with(|| self.phase().cmp(&other.phase()))
     }
 }
 
@@ -151,6 +152,21 @@ mod tests {
         // Even though phase is larger in term1, monomial is smaller, so it should be Less
         assert_eq!(term1.cmp(&term2), Ordering::Less);
         assert!(term1 < term2);
+
+        // Monomials are equal, so phase acts as a tie-breaker.
+        let term3 = PackedPhaseTerm::create(1, 2);
+        let term4 = PackedPhaseTerm::create(1, 7);
+        assert_eq!(term3.cmp(&term4), Ordering::Less);
+    }
+
+    /// Verifies that our custom `Ord` implementation agrees with the derived `PartialEq`.
+    /// In Rust, `a.cmp(&b) == Ordering::Equal` if and only if `a == b`.
+    #[test]
+    fn test_ord_eq_agreement() {
+        let term1 = PackedPhaseTerm::create(1, 2);
+        let term2 = PackedPhaseTerm::create(1, 3);
+        
+        assert_eq!(term1.cmp(&term2) == Ordering::Equal, term1 == term2, "Ord and PartialEq must agree");
     }
 
     /// Tests the crucial property that identical terms with opposing phases
@@ -203,6 +219,46 @@ mod tests {
             PackedPhaseTerm::create(3, 3), // Collides: 1 (from A) + 2 (from B) = 3
         ];
 
+        assert_eq!(poly_a.terms.as_slice(), expected.as_slice());
+    }
+
+    /// Tests phase wraparound when adding two terms where their sum exceeds 8 but is not a multiple of 8.
+    #[test]
+    fn test_phase_poly_add_assign_wraparound() {
+        let mut poly_a = CanonicalPhasePoly {
+            terms: smallvec![PackedPhaseTerm::create(1, 5)],
+        };
+        let poly_b = CanonicalPhasePoly {
+            terms: smallvec![PackedPhaseTerm::create(1, 6)],
+        };
+
+        poly_a.add_assign(&poly_b);
+
+        // 5 + 6 = 11, 11 % 8 = 3
+        let expected = vec![PackedPhaseTerm::create(1, 3)];
+        assert_eq!(poly_a.terms.as_slice(), expected.as_slice());
+    }
+
+    /// Tests that trailing terms from one polynomial are correctly appended when the other exhausts early.
+    #[test]
+    fn test_phase_poly_add_assign_trailing_terms() {
+        let mut poly_a = CanonicalPhasePoly {
+            terms: smallvec![PackedPhaseTerm::create(1, 2)],
+        };
+        let poly_b = CanonicalPhasePoly {
+            terms: smallvec![
+                PackedPhaseTerm::create(2, 5),
+                PackedPhaseTerm::create(3, 1),
+            ],
+        };
+
+        poly_a.add_assign(&poly_b);
+
+        let expected = vec![
+            PackedPhaseTerm::create(1, 2),
+            PackedPhaseTerm::create(2, 5),
+            PackedPhaseTerm::create(3, 1),
+        ];
         assert_eq!(poly_a.terms.as_slice(), expected.as_slice());
     }
 
