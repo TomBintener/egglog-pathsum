@@ -40,10 +40,10 @@ mod size;
 pub use size::*;
 
 // Sugar modules using parse-time macros
+pub mod bridge;
 mod evaluator;
 mod reduction;
 mod sugar;
-mod pathsum;
 
 pub use sugar::*;
 
@@ -57,7 +57,7 @@ pub fn new_experimental_egraph() -> EGraph {
     add_base_sort(&mut egraph, RationalSort, span!()).unwrap();
 
     // PathSum native matrix math support
-    add_base_sort(&mut egraph, crate::pathsum::PathSumSort, span!()).unwrap();
+    add_base_sort(&mut egraph, crate::bridge::PathSumSort, span!()).unwrap();
 
     // Support for set cost
     add_set_cost(&mut egraph);

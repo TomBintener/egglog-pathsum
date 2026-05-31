@@ -145,7 +145,7 @@ impl BooleanPoly {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EvaluatedPathSum {
     pub num_qubits: u32,
     pub num_path_vars: u32,

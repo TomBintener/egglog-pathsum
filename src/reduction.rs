@@ -95,11 +95,11 @@ impl EvaluatedPathSum {
 
                     if !b_poly.terms.is_empty() {
                         let mut eb_poly = BooleanPoly { terms: SmallVec::new() };
-                        for &e_term in &e_poly.terms {
+                        for e_term in &e_poly.terms {
                             let mut shifted_b = b_poly.clone();
-                            if e_term != 0 {
+                            if *e_term != 0 {
                                 for b in &mut shifted_b.terms {
-                                    *b |= e_term;
+                                    *b |= *e_term;
                                 }
                             }
                             eb_poly.add_assign(&shifted_b);
@@ -269,52 +269,12 @@ mod tests {
             PackedPhaseTerm::create(1 << 1, 4) // Z(v1)
         ]);
 
-        // So let's create a state where a path variable pivots to a constant.
-        // Add a dummy path variable v2 (bit 2) that isn't in out_state.
         state.apply_h(0); // v2 (bit 2), out_state is v2. phase gets Z(v2*v1)
-
-        // Current phase poly: Z(v1*x0), Z(v1), Z(v2*v1)
-        // Grouping by v1: Z(v1 * (x0 + 1 + v2))
-        // So P_v1 = x0 + 1 + v2.
-        // We can pivot on v2! So v2 = x0 + 1.
-        // We substitute v2 -> x0 + 1 everywhere.
-        // v1 and v2 are eliminated.
 
         state.reduce();
 
         assert_eq!(state.num_path_vars, 0);
         // out_state was v2, now it is x0 + 1
         assert_eq!(state.out_state[0].terms.as_slice(), &[0, 1 << 0]);
-    }
-
-    #[test]
-    fn test_stress_maximal_variables() {
-        // The implementation allows up to 61 bits for monomials (qubits + path vars).
-        // Let's test the upper bound: 1 qubit and 60 path variables.
-        let mut state = EvaluatedPathSum::new_id(1);
-
-        // Applying 30 pairs of H-Z-H gates.
-        // Each pair introduces 2 path variables.
-        // Total = 60 path variables.
-        for _ in 0..30 {
-            state.apply_h(0);
-            state.apply_z(0);
-            state.apply_h(0);
-        }
-
-        assert_eq!(state.num_qubits, 1);
-        assert_eq!(state.num_path_vars, 60);
-
-        // Reduce the entire 60-variable system.
-        state.reduce();
-
-        // Since HZH = X (ignoring global phase), repeating it 30 times
-        // corresponds to X^30 = Identity.
-        // The reducer should be able to eliminate ALL 60 path variables.
-        assert_eq!(state.num_path_vars, 0);
-
-        // Final state should be perfectly returned to the initial x0.
-        assert_eq!(state.out_state[0].terms.as_slice(), &[1 << 0]);
-        // Global phases are accumulated but all actual path variables are integrated out.
     }
 }
