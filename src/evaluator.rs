@@ -1,6 +1,18 @@
+//! Path Sum Evaluator for Quantum Circuits.
+//!
+//! This module provides methods to evaluate quantum gates on the `EvaluatedPathSum`
+//! structure. It simulates the action of Clifford+T gates by tracking the transformations
+//! of the output state (represented as boolean polynomials) and the accumulated
+//! phase polynomial (represented in a canonical form).
+
 use crate::canonical_phase_poly::{BooleanPoly, CanonicalPhasePoly, EvaluatedPathSum, PackedPhaseTerm};
 
 impl EvaluatedPathSum {
+    /// Creates a new identity `EvaluatedPathSum` for a given number of qubits.
+    ///
+    /// The initial state maps each qubit to its corresponding input variable
+    /// (e.g., qubit `i` corresponds to the monomial `1 << i`). The phase polynomial
+    /// is initially empty, and there are zero path variables.
     pub fn new_id(num_qubits: u32) -> Self {
         let mut out_state = Vec::with_capacity(num_qubits as usize);
         for i in 0..num_qubits {
@@ -17,11 +29,20 @@ impl EvaluatedPathSum {
         }
     }
 
+    /// Applies a Pauli X gate (NOT gate) to the specified qubit.
+    ///
+    /// The X gate flips the boolean state of the qubit, which corresponds to
+    /// adding the constant `1` (represented as the monomial `0`) in GF(2)
+    /// to the target qubit's boolean polynomial.
     pub fn apply_x(&mut self, q: usize) {
         let constant_one = BooleanPoly { terms: smallvec::smallvec![0] };
         self.out_state[q].add_assign(&constant_one);
     }
 
+    /// Applies a Controlled-NOT (CX) gate between a control qubit and a target qubit.
+    ///
+    /// The CX gate adds the boolean state of the control qubit to the target qubit
+    /// in GF(2), which corresponds to an XOR operation on their polynomial representations.
     pub fn apply_cx(&mut self, qc: usize, qt: usize) {
         assert!(qc != qt, "CX control and target must be distinct");
 
@@ -37,6 +58,11 @@ impl EvaluatedPathSum {
         tgt_poly.add_assign(ctrl_poly);
     }
 
+    /// Applies a Pauli Z gate to the specified qubit.
+    ///
+    /// The Z gate applies a phase of pi (-1) if the qubit is in the |1> state.
+    /// This adds a phase of pi (phase value 4) to the phase polynomial for every
+    /// term currently present in the qubit's boolean state.
     pub fn apply_z(&mut self, q: usize) {
         let terms = &self.out_state[q].terms;
         let mut batch = Vec::with_capacity(terms.len());
@@ -47,6 +73,12 @@ impl EvaluatedPathSum {
         self.phase_poly.merge_unsorted_batch(batch);
     }
 
+    /// Applies an S gate (Phase gate) to the specified qubit.
+    ///
+    /// The S gate applies a phase of pi/2 (i) if the qubit is in the |1> state.
+    /// Because the state is a sum of terms in GF(2), the phase distributes over the terms.
+    /// This introduces individual phases of pi/2 (value 2) for each term, and
+    /// cross-terms (bitwise OR of term pairs) with a phase of pi (value 4).
     pub fn apply_s(&mut self, q: usize) {
         let terms = &self.out_state[q].terms;
         let n = terms.len();
@@ -64,6 +96,12 @@ impl EvaluatedPathSum {
         self.phase_poly.merge_unsorted_batch(batch);
     }
 
+    /// Applies a T gate (pi/4 Phase gate) to the specified qubit.
+    ///
+    /// The T gate applies a phase of pi/4 if the qubit is in the |1> state.
+    /// The phase distribution generates individual pi/4 phases (value 1) for each term,
+    /// pair-wise cross-terms with -pi/2 mod 2pi (value 6), and triplet cross-terms
+    /// with pi (value 4).
     pub fn apply_t(&mut self, q: usize) {
         let terms = &self.out_state[q].terms;
         let n = terms.len();
@@ -87,6 +125,12 @@ impl EvaluatedPathSum {
         self.phase_poly.merge_unsorted_batch(batch);
     }
 
+    /// Applies a Hadamard (H) gate to the specified qubit.
+    ///
+    /// The Hadamard gate introduces a new path variable representing the quantum superposition.
+    /// It updates the target qubit's state to this new path variable, and adds
+    /// phase cross-terms (phase pi, value 4) between the old state terms and the new path variable
+    /// into the phase polynomial.
     pub fn apply_h(&mut self, q: usize) {
         let var_index = self.num_qubits + self.num_path_vars;
         assert!(var_index < 61, "Exceeded 61-bit limit for path variables");
@@ -114,6 +158,8 @@ mod tests {
     use super::*;
     use crate::canonical_phase_poly::PackedPhaseTerm;
 
+    /// Verifies that creating a new identity state initializes the qubits
+    /// to their corresponding input variables and starts with an empty phase polynomial.
     #[test]
     fn test_new_id() {
         let state = EvaluatedPathSum::new_id(3);
@@ -126,6 +172,8 @@ mod tests {
         assert!(state.phase_poly.terms.is_empty());
     }
 
+    /// Tests that the Pauli X gate correctly flips the state of a qubit
+    /// by adding the constant `1` (monomial `0`) to its boolean polynomial.
     #[test]
     fn test_apply_x() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -134,6 +182,7 @@ mod tests {
         assert_eq!(state.out_state[0].terms.as_slice(), &[0, 1]);
     }
 
+    /// Verifies that applying the Pauli X gate twice results in the identity operation.
     #[test]
     fn test_apply_x_identity() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -143,6 +192,8 @@ mod tests {
         assert_eq!(state.out_state[0], initial_state);
     }
 
+    /// Tests the Controlled-NOT (CX) gate by ensuring it adds the control qubit's
+    /// state to the target qubit's state in GF(2) (XOR).
     #[test]
     fn test_apply_cx() {
         let mut state = EvaluatedPathSum::new_id(2);
@@ -153,6 +204,8 @@ mod tests {
         assert_eq!(state.out_state[0].terms.as_slice(), &[1 << 0]);
     }
 
+    /// Tests the CX gate with target and control reversed to ensure
+    /// that memory aliasing and splitting works correctly regardless of index order.
     #[test]
     fn test_apply_cx_reversed() {
         let mut state = EvaluatedPathSum::new_id(2);
@@ -163,6 +216,8 @@ mod tests {
         assert_eq!(state.out_state[1].terms.as_slice(), &[1 << 1]);
     }
 
+    /// Verifies that applying the CX gate twice with the same control and target
+    /// results in the identity operation.
     #[test]
     fn test_apply_cx_identity() {
         let mut state = EvaluatedPathSum::new_id(2);
@@ -172,6 +227,8 @@ mod tests {
         assert_eq!(state.out_state, initial_state);
     }
 
+    /// Tests the Pauli Z gate to ensure it correctly maps a boolean state to a phase polynomial
+    /// where every monomial receives a phase of pi (value 4).
     #[test]
     fn test_apply_z() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -189,6 +246,9 @@ mod tests {
         assert_eq!(state.phase_poly.terms.as_slice(), expected_phases.as_slice());
     }
 
+    /// Tests the S (Phase) gate to ensure it distributes a pi/2 phase correctly
+    /// over a sum of terms, generating pi/2 phases for individual terms
+    /// and pi phases for cross-terms.
     #[test]
     fn test_apply_s() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -208,6 +268,8 @@ mod tests {
         assert_eq!(state.phase_poly.terms.as_slice(), expected_phases.as_slice());
     }
 
+    /// Tests the T (pi/4 Phase) gate to ensure it correctly distributes a pi/4 phase
+    /// over a sum of terms, generating the correct individual, pair-wise, and triplet phases.
     #[test]
     fn test_apply_t() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -232,6 +294,9 @@ mod tests {
         assert_eq!(state.phase_poly.terms.as_slice(), expected_phases.as_slice());
     }
 
+    /// Tests the Hadamard (H) gate to ensure it introduces a new path variable
+    /// to represent superposition, sets the target qubit to this variable,
+    /// and correctly adds phase cross-terms between the old state and the new variable.
     #[test]
     fn test_apply_h() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -253,6 +318,9 @@ mod tests {
         assert_eq!(state.phase_poly.terms.as_slice(), expected_phases.as_slice());
     }
 
+    /// Integration test for the composition of H, Z, and H gates.
+    /// Verifies that multiple path variables are allocated correctly
+    /// and that the phases accumulate as expected for a sequence of gates.
     #[test]
     fn test_hzh_composition() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -277,6 +345,8 @@ mod tests {
         assert_eq!(state.phase_poly.terms.as_slice(), expected_phases.as_slice());
     }
 
+    /// Verifies that applying a phase gate (S) to a constant state (monomial 0)
+    /// correctly adds a global phase to the polynomial.
     #[test]
     fn test_phase_on_constant() {
         let mut state = EvaluatedPathSum::new_id(1);

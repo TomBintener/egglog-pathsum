@@ -1,8 +1,26 @@
+//! Path Sum Reduction via Gaussian Elimination.
+//!
+//! This module implements the "reduction" or "integration" phase of the path sum
+//! evaluation. The core logic resides in the `reduce` method for `EvaluatedPathSum`.
+//! This method identifies and solves for internal "path variables" that appear
+//! linearly with a phase of pi in the phase polynomial.
+//!
+//! The process uses Gaussian elimination over GF(2) to substitute these solved
+//! variables back into the path sum, effectively integrating them out. This simplifies
+//! the representation and is a key step in canonicalizing the path sum. After
+//! elimination, any remaining path variables are re-indexed to form a compact,
+//! contiguous set.
+
 use crate::canonical_phase_poly::{BooleanPoly, EvaluatedPathSum, PackedPhaseTerm};
 use smallvec::{smallvec, SmallVec};
 
 impl BooleanPoly {
-    /// Creates a BooleanPoly from a bitmask, where bit 63 represents the constant 1.
+    /// Creates a `BooleanPoly` from a bitmask representation.
+    ///
+    /// This is a helper for the reduction algorithm. The bitmask is interpreted as follows:
+    /// - Bit `i` (for `i` < 63) corresponds to a monomial `1 << i`.
+    /// - Bit 63 is a special flag representing the constant `1` (monomial `0`).
+    /// The resulting terms are sorted to maintain the canonical form of `BooleanPoly`.
     fn from_mask(mask: u64) -> Self {
         let mut terms = SmallVec::new();
         if (mask & (1u64 << 63)) != 0 {
@@ -20,8 +38,26 @@ impl BooleanPoly {
 }
 
 impl EvaluatedPathSum {
-    /// Reduces the path sum by integrating out internal variables
-    /// using Gaussian elimination over GF(2). This is the "Integrator" phase.
+    /// Reduces the path sum by integrating out internal variables using Gaussian elimination.
+    ///
+    /// This method implements the "Integrator" phase of the path sum formalism. It works
+    /// by repeatedly scanning for path variables that can be "solved for". A variable `v`
+    /// can be solved for if it meets two criteria:
+    ///
+    /// 1. It does not appear in the final output state (`out_state`). This means it is
+    ///    a purely internal, temporary variable.
+    /// 2. It appears only *linearly* and with a phase of *pi* (phase value 4) in the
+    ///    phase polynomial. This corresponds to an equation of the form `v * P = pi`,
+    ///    which can be rewritten in GF(2) as `v = P`.
+    ///
+    /// When such a variable `v` is found, we identify a suitable pivot variable `u` from
+    /// the polynomial `P`. We then perform a substitution `u = P / u` throughout the entire
+    /// path sum (both `out_state` and `phase_poly`). This eliminates both `v` and `u`
+    /// from the set of path variables.
+    ///
+    /// This process is repeated until no more variables can be eliminated. Finally, the
+    /// remaining ("surviving") path variables are re-indexed to be contiguous, and the
+    /// total `num_path_vars` is updated.
     pub fn reduce(&mut self) {
         let mut dead_vars = 0u64;
         let original_num_path_vars = self.num_path_vars;
@@ -180,6 +216,9 @@ mod tests {
     use super::*;
     use crate::canonical_phase_poly::EvaluatedPathSum;
 
+    /// Tests that the sequence H-Z-H, which is equivalent to an X gate,
+    /// correctly reduces to the expected state. This is a classic integration test
+    /// for the reduction algorithm.
     #[test]
     fn test_reduce_hzh_to_x() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -193,6 +232,8 @@ mod tests {
         assert!(state.phase_poly.terms.is_empty());
     }
 
+    /// Verifies that applying reduction to a state with an unsolvable path variable
+    /// (from a single H gate) does not change the state.
     #[test]
     fn test_reduce_h_does_not_eliminate() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -202,6 +243,8 @@ mod tests {
         assert_eq!(state, original_state);
     }
 
+    /// Tests that a sequence of two Hadamard gates, which should be an identity operation,
+    /// correctly reduces to the initial state, eliminating all intermediate path variables.
     #[test]
     fn test_double_h_is_identity() {
         let mut state = EvaluatedPathSum::new_id(1);
@@ -214,6 +257,9 @@ mod tests {
         assert!(state.phase_poly.terms.is_empty());
     }
 
+    /// A specific test to verify the variable re-indexing (repacking) logic.
+    /// It creates a scenario where path variables are eliminated out of order,
+    /// forcing the remapping of surviving variables.
     #[test]
     fn test_repacking_logic() {
         let mut state = EvaluatedPathSum::new_id(1); // q0 is bit 0
@@ -234,6 +280,8 @@ mod tests {
         assert_eq!(state.out_state[0].terms.as_slice(), &[1 << 0]);
     }
 
+    /// Verifies that calling `reduce` on a circuit with no path variables
+    /// is a no-op and does not alter the state.
     #[test]
     fn test_noop_reduction() {
         let mut state = EvaluatedPathSum::new_id(2);
@@ -244,6 +292,9 @@ mod tests {
         assert_eq!(state, initial_state);
     }
 
+    /// Tests the reduction of a SWAP circuit composed of three CX gates.
+    /// The circuit creates no path variables and should reduce to the expected
+    /// swapped state.
     #[test]
     fn test_swap_circuit() {
         let mut state = EvaluatedPathSum::new_id(2); // q0, q1
@@ -259,6 +310,9 @@ mod tests {
         assert!(state.phase_poly.terms.is_empty());
     }
 
+    /// Tests a more complex scenario where a variable is eliminated by equating it
+    /// to a constant (1). This forces a non-trivial substitution back into the
+    /// output state.
     #[test]
     fn test_elimination_to_constant() {
         let mut state = EvaluatedPathSum::new_id(1);

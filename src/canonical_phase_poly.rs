@@ -1,19 +1,39 @@
+//! Canonical Phase Polynomial and Boolean Polynomial structures for Path Sum evaluation.
+//!
+//! This module provides the foundational data structures used to represent and manipulate
+//! phase polynomials and boolean polynomials (over GF(2)) in a canonical form. These
+//! structures are crucial in quantum compilation and path sum evaluation for efficiently
+//! tracking the accumulated phases and output states of qubits.
+
 use std::cmp::Ordering;
 use smallvec::SmallVec;
 
+/// A packed representation of a phase term in a phase polynomial.
+///
+/// It stores both the monomial (a bitset of variables, up to 61 bits)
+/// and the phase (a 3-bit value representing a multiple of pi/4, i.e., 0 to 7)
+/// in a single 64-bit integer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PackedPhaseTerm(pub u64);
 
 impl PackedPhaseTerm {
+    /// Bitmask used to extract the phase bits (the top 3 bits).
     pub const PHASE_MASK: u64 = 0xE000_0000_0000_0000;
+    /// Bitmask used to extract the monomial bits (the bottom 61 bits).
     pub const MONOMIAL_MASK: u64 = !Self::PHASE_MASK;
 
+    /// Retrieves the monomial part of the packed term.
     #[inline(always)]
     pub fn monomial(&self) -> u64 { self.0 & Self::MONOMIAL_MASK }
 
+    /// Retrieves the phase part of the packed term as a value from 0 to 7.
     #[inline(always)]
     pub fn phase(&self) -> u8 { (self.0 >> 61) as u8 }
 
+    /// Creates a new `PackedPhaseTerm` from a monomial and a phase.
+    ///
+    /// The monomial is masked to 61 bits and the phase is masked to 3 bits
+    /// to ensure the mathematical boundaries are enforced.
     #[inline(always)]
     pub fn create(monomial: u64, phase: u8) -> Self {
         // Silently enforce the mathematical boundaries to prevent memory corruption.
@@ -32,6 +52,8 @@ impl PartialOrd for PackedPhaseTerm {
 }
 
 impl Ord for PackedPhaseTerm {
+    /// Custom ordering that prioritizes the monomial, followed by the phase.
+    /// This ensures that terms with the same monomial are grouped together.
     #[inline(always)]
     fn cmp(&self, other: &Self) -> Ordering {
         self.monomial().cmp(&other.monomial())
@@ -39,12 +61,23 @@ impl Ord for PackedPhaseTerm {
     }
 }
 
+/// Represents a phase polynomial in a canonical form.
+///
+/// The terms are stored in a small vector, sorted by their monomial.
+/// Multiple terms with the same monomial are compacted, and terms with
+/// a phase of 0 (modulo 8) are removed to maintain canonicity.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CanonicalPhasePoly {
+    /// The sorted, compacted list of phase terms.
     pub terms: SmallVec<[PackedPhaseTerm; 16]>,
 }
 
 impl CanonicalPhasePoly {
+    /// Adds another canonical phase polynomial to this one in place.
+    ///
+    /// This performs a linear-time merge of the two sorted term lists,
+    /// adding the phases of identical monomials modulo 8. Any resulting
+    /// terms with a phase of 0 are discarded.
     pub fn add_assign(&mut self, other: &Self) {
         let mut result = SmallVec::with_capacity(self.terms.len() + other.terms.len());
         let mut i = 0;
@@ -81,9 +114,6 @@ impl CanonicalPhasePoly {
 
         // 2. Compact duplicates modulo 8 in-place
         let mut compacted = SmallVec::<[PackedPhaseTerm; 16]>::new();
-        if batch.is_empty() {
-            return;
-        }
         let mut current_mono = batch[0].monomial();
         let mut current_phase = batch[0].phase();
 
@@ -108,12 +138,22 @@ impl CanonicalPhasePoly {
     }
 }
 
+/// Represents a boolean polynomial over GF(2).
+///
+/// It stores a sorted list of variables or monomials (represented as `u64`).
+/// Addition of polynomials behaves like XOR (since a + a = 0 in GF(2)).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BooleanPoly {
+    /// The sorted list of terms (monomials) present in the polynomial.
     pub terms: SmallVec<[u64; 8]>,
 }
 
 impl BooleanPoly {
+    /// Adds another boolean polynomial to this one in place over GF(2).
+    ///
+    /// This performs a linear-time merge of the two sorted term lists.
+    /// Because addition is in GF(2), if a term appears in both polynomials,
+    /// they cancel each other out and are removed from the result.
     pub fn add_assign(&mut self, other: &Self) {
         let mut result = SmallVec::with_capacity(self.terms.len() + other.terms.len());
         let mut i = 0;
@@ -145,11 +185,20 @@ impl BooleanPoly {
     }
 }
 
+/// Represents the final evaluation of a path sum.
+///
+/// Encapsulates the number of qubits, the number of path variables,
+/// the boolean polynomials representing the output state of each qubit,
+/// and the overall phase polynomial.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EvaluatedPathSum {
+    /// The number of qubits in the system.
     pub num_qubits: u32,
+    /// The number of path variables introduced during evaluation.
     pub num_path_vars: u32,
+    /// The output state for each qubit, represented as a boolean polynomial.
     pub out_state: Vec<BooleanPoly>,
+    /// The canonical phase polynomial representing the accumulated phases.
     pub phase_poly: CanonicalPhasePoly,
 }
 
