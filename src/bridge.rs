@@ -21,7 +21,7 @@
 
 use crate::canonical_phase_poly::EvaluatedPathSum;
 use egglog::prelude::BaseSort;
-use egglog::sort::{BaseValues, Boxed};
+use egglog::sort::{BaseValues, Boxed, S};
 use egglog::{add_primitive, EGraph, Value};
 use egglog::ast::Literal;
 use egglog::{TermId, TermDag};
@@ -138,6 +138,12 @@ fn apply_h_logic(state: PSum, q: i64) -> PSum {
     PSum::new(new_state)
 }
 
+/// Helper function for the debug primitive to avoid nested macro issues.
+fn debug_logic(state: PSum) -> S {
+    let psum = &*state;
+    S::new(format!("PathSum(qubits: {}, path_vars: {}, phase_terms: {})", psum.num_qubits, psum.num_path_vars, psum.phase_poly.terms.len()))
+}
+
 impl BaseSort for PathSumSort {
     type Base = PSum;
 
@@ -175,14 +181,20 @@ impl BaseSort for PathSumSort {
         add_primitive!(eg, "rust_apply_h_ffi" = |state: PSum, q: i64| -> PSum {
             apply_h_logic(state, q)
         });
+
+        add_primitive!(eg, "rust_pathsum_debug" = |state: PSum| -> S {
+            debug_logic(state)
+        });
     }
 
     /// Reconstructs the term for extraction out of the e-graph.
     ///
-    /// Since the full internal representation of the path sum is too complex to be
-    /// usefully extracted back into an `egglog` AST directly, we return a placeholder string literal.
+    /// This acts as a safe type-fallback. By returning a valid AST constructor
+    /// `(rust_id_pathsum_ffi 0)`, we protect the engine from internal type-inference panics
+    /// if it accidentally attempts a direct extraction of this complex type.
     fn reconstruct_termdag(&self, _base_values: &BaseValues, _value: Value, termdag: &mut TermDag) -> TermId {
-        termdag.lit(Literal::String("<Unextracted PathSum State>".into()))
+        let arg = termdag.lit(Literal::Int(0));
+        termdag.app("rust_id_pathsum_ffi".to_string(), vec![arg])
     }
 }
 
@@ -215,6 +227,7 @@ mod tests {
             (let state4 (rust_apply_t_ffi state3 1))
             (let state5 (rust_apply_cx_ffi state4 0 1))
             (let state6 (rust_apply_h_ffi state5 0))
+            (let debug_str (rust_pathsum_debug state6))
         "#;
         let result = eg.parse_and_run_program(None, script);
         assert!(result.is_ok(), "Failed to run primitives through egglog: {:?}", result);
