@@ -188,6 +188,8 @@ impl BaseSort for PathSumSort {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::canonical_phase_poly::EvaluatedPathSum;
 
     /// Verifies that the custom `PathSum` sort and its initialization primitive
     /// (`rust_id_pathsum_ffi`) are correctly registered and callable from within
@@ -198,5 +200,80 @@ mod tests {
         let script = r#"(let state (rust_id_pathsum_ffi 2))"#;
         let result = eg.parse_and_run_program(None, script);
         assert!(result.is_ok(), "Failed to run rust_id_pathsum through egglog: {:?}", result);
+    }
+
+    /// Verifies that all gate application primitives are registered and callable
+    /// from within an `egglog` script without raising errors.
+    #[test]
+    fn test_bridge_all_primitives_callable() {
+        let mut eg = crate::new_experimental_egraph();
+        let script = r#"
+            (let state0 (rust_id_pathsum_ffi 2))
+            (let state1 (rust_apply_x_ffi state0 0))
+            (let state2 (rust_apply_z_ffi state1 0))
+            (let state3 (rust_apply_s_ffi state2 1))
+            (let state4 (rust_apply_t_ffi state3 1))
+            (let state5 (rust_apply_cx_ffi state4 0 1))
+            (let state6 (rust_apply_h_ffi state5 0))
+        "#;
+        let result = eg.parse_and_run_program(None, script);
+        assert!(result.is_ok(), "Failed to run primitives through egglog: {:?}", result);
+    }
+
+    /// Tests the `id_pathsum_logic` function for edge cases.
+    #[test]
+    fn test_id_pathsum_logic_edge_cases() {
+        let state = id_pathsum_logic(-5);
+        assert_eq!(state.num_qubits, 0);
+
+        let state2 = id_pathsum_logic(3);
+        assert_eq!(state2.num_qubits, 3);
+    }
+
+    /// Tests that the FFI panic shields correctly prevent out-of-bounds errors,
+    /// safely returning the unmodified state.
+    #[test]
+    fn test_ffi_panic_shields() {
+        let initial = id_pathsum_logic(1); // 1 qubit: valid index is 0
+
+        // Out of bounds accesses should return the state unchanged.
+        assert_eq!(*apply_x_logic(initial.clone(), 1), *initial);
+        assert_eq!(*apply_x_logic(initial.clone(), -1), *initial);
+
+        assert_eq!(*apply_z_logic(initial.clone(), 1), *initial);
+        assert_eq!(*apply_s_logic(initial.clone(), 1), *initial);
+        assert_eq!(*apply_t_logic(initial.clone(), 1), *initial);
+        assert_eq!(*apply_h_logic(initial.clone(), 1), *initial);
+
+        // CX requires two distinct, in-bounds qubits
+        assert_eq!(*apply_cx_logic(initial.clone(), 0, 1), *initial); // qt out of bounds
+        assert_eq!(*apply_cx_logic(initial.clone(), 1, 0), *initial); // qc out of bounds
+        assert_eq!(*apply_cx_logic(initial.clone(), 0, 0), *initial); // qc == qt
+    }
+
+    /// Tests that the logic functions correctly apply the gate and eagerly
+    /// invoke the reduction phase, tracking equivalence with manual Rust application.
+    #[test]
+    fn test_logic_functions_apply_and_reduce() {
+        // Construct the expected state through explicit, manual calls.
+        let mut expected = EvaluatedPathSum::new_id(2);
+
+        // H on q0
+        expected.apply_h(0);
+        expected.reduce();
+        let state1 = apply_h_logic(id_pathsum_logic(2), 0);
+        assert_eq!(*state1, expected);
+
+        // CX q0 -> q1
+        expected.apply_cx(0, 1);
+        expected.reduce();
+        let state2 = apply_cx_logic(state1, 0, 1);
+        assert_eq!(*state2, expected);
+
+        // Z on q1
+        expected.apply_z(1);
+        expected.reduce();
+        let state3 = apply_z_logic(state2, 1);
+        assert_eq!(*state3, expected);
     }
 }
