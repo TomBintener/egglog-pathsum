@@ -92,6 +92,17 @@ fn apply_s_logic(state: PSum, q: i64) -> PSum {
     PSum::new(new_state)
 }
 
+/// Applies an S-dagger gate to the path sum state at the specified qubit.
+fn apply_sdg_logic(state: PSum, q: i64) -> PSum {
+    let mut new_state = (*state).clone();
+    if q < 0 || q as usize >= new_state.num_qubits as usize {
+        return PSum::new(new_state); // FFI Shield
+    }
+    new_state.apply_sdg(q as usize);
+    new_state.reduce();
+    PSum::new(new_state)
+}
+
 /// Applies a T gate to the path sum state at the specified qubit.
 ///
 /// Includes an FFI panic shield: if `q` is out of bounds, the state is returned unchanged.
@@ -102,6 +113,28 @@ fn apply_t_logic(state: PSum, q: i64) -> PSum {
         return PSum::new(new_state); // FFI Shield
     }
     new_state.apply_t(q as usize);
+    new_state.reduce();
+    PSum::new(new_state)
+}
+
+/// Applies a T-dagger gate to the path sum state at the specified qubit.
+fn apply_tdg_logic(state: PSum, q: i64) -> PSum {
+    let mut new_state = (*state).clone();
+    if q < 0 || q as usize >= new_state.num_qubits as usize {
+        return PSum::new(new_state); // FFI Shield
+    }
+    new_state.apply_tdg(q as usize);
+    new_state.reduce();
+    PSum::new(new_state)
+}
+
+/// Applies a square-root-of-X gate to the path sum state at the specified qubit.
+fn apply_sx_logic(state: PSum, q: i64) -> PSum {
+    let mut new_state = (*state).clone();
+    if q < 0 || q as usize >= new_state.num_qubits as usize {
+        return PSum::new(new_state); // FFI Shield
+    }
+    new_state.apply_sx(q as usize);
     new_state.reduce();
     PSum::new(new_state)
 }
@@ -170,8 +203,20 @@ impl BaseSort for PathSumSort {
             apply_s_logic(state, q)
         });
 
+        add_primitive!(eg, "rust_apply_sdg_ffi" = |state: PSum, q: i64| -> PSum {
+            apply_sdg_logic(state, q)
+        });
+
         add_primitive!(eg, "rust_apply_t_ffi" = |state: PSum, q: i64| -> PSum {
             apply_t_logic(state, q)
+        });
+
+        add_primitive!(eg, "rust_apply_tdg_ffi" = |state: PSum, q: i64| -> PSum {
+            apply_tdg_logic(state, q)
+        });
+
+        add_primitive!(eg, "rust_apply_sx_ffi" = |state: PSum, q: i64| -> PSum {
+            apply_sx_logic(state, q)
         });
 
         add_primitive!(eg, "rust_apply_cx_ffi" = |state: PSum, qc: i64, qt: i64| -> PSum {
@@ -227,7 +272,10 @@ mod tests {
             (let state4 (rust_apply_t_ffi state3 1))
             (let state5 (rust_apply_cx_ffi state4 0 1))
             (let state6 (rust_apply_h_ffi state5 0))
-            (let debug_str (rust_pathsum_debug state6))
+            (let state7 (rust_apply_sdg_ffi state6 1))
+            (let state8 (rust_apply_tdg_ffi state7 1))
+            (let state9 (rust_apply_sx_ffi state8 0))
+            (let debug_str (rust_pathsum_debug state9))
         "#;
         let result = eg.parse_and_run_program(None, script);
         assert!(result.is_ok(), "Failed to run primitives through egglog: {:?}", result);
@@ -255,7 +303,10 @@ mod tests {
 
         assert_eq!(*apply_z_logic(initial.clone(), 1), *initial);
         assert_eq!(*apply_s_logic(initial.clone(), 1), *initial);
+        assert_eq!(*apply_sdg_logic(initial.clone(), 1), *initial);
         assert_eq!(*apply_t_logic(initial.clone(), 1), *initial);
+        assert_eq!(*apply_tdg_logic(initial.clone(), 1), *initial);
+        assert_eq!(*apply_sx_logic(initial.clone(), 1), *initial);
         assert_eq!(*apply_h_logic(initial.clone(), 1), *initial);
 
         // CX requires two distinct, in-bounds qubits

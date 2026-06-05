@@ -96,6 +96,22 @@ impl EvaluatedPathSum {
         self.phase_poly.merge_unsorted_batch(batch);
     }
 
+    /// Applies an S-dagger gate (inverse Phase gate) to the specified qubit.
+    pub fn apply_sdg(&mut self, q: usize) {
+        let terms = &self.out_state[q].terms;
+        let n = terms.len();
+        let capacity = n + (n * n.saturating_sub(1)) / 2;
+        let mut batch = Vec::with_capacity(capacity);
+
+        for i in 0..n {
+            batch.push(PackedPhaseTerm::create(terms[i], 6)); // -pi/2
+            for j in (i + 1)..n {
+                batch.push(PackedPhaseTerm::create(terms[i] | terms[j], 4)); // cross-term +pi
+            }
+        }
+        self.phase_poly.merge_unsorted_batch(batch);
+    }
+
     /// Applies a T gate (pi/4 Phase gate) to the specified qubit.
     ///
     /// The T gate applies a phase of pi/4 if the qubit is in the |1> state.
@@ -123,6 +139,35 @@ impl EvaluatedPathSum {
             }
         }
         self.phase_poly.merge_unsorted_batch(batch);
+    }
+
+    /// Applies a T-dagger gate (inverse pi/4 Phase gate) to the specified qubit.
+    pub fn apply_tdg(&mut self, q: usize) {
+        let terms = &self.out_state[q].terms;
+        let n = terms.len();
+        let pairs = (n * n.saturating_sub(1)) / 2;
+        let triplets = (n * n.saturating_sub(1) * n.saturating_sub(2)) / 6;
+        let capacity = n + pairs + triplets;
+        let mut batch = Vec::with_capacity(capacity);
+
+        for i in 0..n {
+            batch.push(PackedPhaseTerm::create(terms[i], 7)); // -pi/4
+            for j in (i + 1)..n {
+                batch.push(PackedPhaseTerm::create(terms[i] | terms[j], 2)); // +pi/2 mod 8
+                for k in (j + 1)..n {
+                    batch.push(PackedPhaseTerm::create(terms[i] | terms[j] | terms[k], 4)); // +pi
+                }
+            }
+        }
+        self.phase_poly.merge_unsorted_batch(batch);
+    }
+
+    /// Applies a square-root-of-X gate to the specified qubit.
+    /// This is equivalent to H S H.
+    pub fn apply_sx(&mut self, q: usize) {
+        self.apply_h(q);
+        self.apply_s(q);
+        self.apply_h(q);
     }
 
     /// Applies a Hadamard (H) gate to the specified qubit.
@@ -357,5 +402,50 @@ mod tests {
         // S gate on a constant 1 should add a global phase of pi/2
         let expected_phases = vec![PackedPhaseTerm::create(0, 2)];
         assert_eq!(state.phase_poly.terms.as_slice(), expected_phases.as_slice());
+    }
+
+    #[test]
+    fn test_s_sdg_identity() {
+        let mut state = EvaluatedPathSum::new_id(1);
+        let initial_state = state.clone();
+        state.apply_s(0);
+        state.apply_sdg(0);
+        assert_eq!(state, initial_state);
+
+        let mut state2 = EvaluatedPathSum::new_id(1);
+        let initial_state2 = state2.clone();
+        state2.apply_sdg(0);
+        state2.apply_s(0);
+        assert_eq!(state2, initial_state2);
+    }
+
+    #[test]
+    fn test_t_tdg_identity() {
+        let mut state = EvaluatedPathSum::new_id(1);
+        let initial_state = state.clone();
+        state.apply_t(0);
+        state.apply_tdg(0);
+        assert_eq!(state, initial_state);
+
+        let mut state2 = EvaluatedPathSum::new_id(1);
+        let initial_state2 = state2.clone();
+        state2.apply_tdg(0);
+        state2.apply_t(0);
+        assert_eq!(state2, initial_state2);
+    }
+
+    #[test]
+    fn test_sx_is_h_s_h() {
+        let mut state_sx = EvaluatedPathSum::new_id(1);
+        state_sx.apply_sx(0);
+        state_sx.reduce();
+
+        let mut state_hsh = EvaluatedPathSum::new_id(1);
+        state_hsh.apply_h(0);
+        state_hsh.apply_s(0);
+        state_hsh.apply_h(0);
+        state_hsh.reduce();
+
+        assert_eq!(state_sx, state_hsh);
     }
 }
