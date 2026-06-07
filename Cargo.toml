@@ -12,9 +12,28 @@ readme = "README.md"
 harness = false
 name = "files"
 
+[[bin]]
+name = "profile_oracle"
+path = "src/bin/profile_oracle.rs"
+
+[[bin]]
+name = "memory_benchmark"
+path = "src/bin/memory_benchmark.rs"
+
+# Disable the default benchmark harness to use criterion
+[[bench]]
+name = "boilerplate_benchmark"
+harness = false
+
+[[bench]]
+name = "full_stack_benchmark"
+harness = false
+
 [features]
 default = ["bin"]
 bin = ["egglog/bin"]
+dhat-heap = ["dhat"]
+tracy = ["tracing-tracy", "tracing-subscriber"]
 
 [dependencies]
 egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug", default-features = false }
@@ -26,6 +45,22 @@ lazy_static = "1.4"
 log = "0.4"
 smallvec = "1.13"
 
+# For memory profiling (optional, enabled via feature)
+dhat = { version = "0.3", optional = true }
+
+# For FFI microsecond tracing (optional, enabled via feature)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", optional = true }
+tracing-tracy = { version = "0.11", optional = true }
+
+rand = "0.8"
+
 [dev-dependencies]
 glob = "0.3.1"
 libtest-mimic = "0.8.1"
+criterion = "0.5"
+
+[profile.release]
+debug = true            # Keep debug symbols for the profiler
+strip = false           # Do not strip symbols
+opt-level = 3           # Maintain maximum performance

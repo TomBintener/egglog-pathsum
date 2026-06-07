@@ -44,6 +44,7 @@ pub mod bridge;
 mod evaluator;
 mod reduction;
 mod sugar;
+pub mod app;
 
 pub use sugar::*;
 
