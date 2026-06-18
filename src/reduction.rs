@@ -67,6 +67,7 @@ impl EvaluatedPathSum {
                 & u64::MAX.checked_shr(64 - (self.num_qubits + original_num_path_vars) as u32).unwrap_or(0)
         };
 
+        let mut continuous_needs_compact = false;
         let mut changed = true;
         while changed {
             changed = false;
@@ -141,12 +142,17 @@ impl EvaluatedPathSum {
                                 for b in &mut shifted_b.terms {
                                     *b |= *e_term;
                                 }
+                                shifted_b.terms.sort_unstable();
                             }
                             eb_poly.add_assign(&shifted_b);
                         }
                         poly.add_assign(&eb_poly);
                     }
                 }
+
+                // Substitute continuously, but defer compaction
+                self.continuous_poly.substitute(u_mask, &e_poly);
+                continuous_needs_compact = true;
 
                 let mut next_gen_terms = Vec::new();
                 for term in self.phase_poly.terms.iter() {
@@ -200,6 +206,20 @@ impl EvaluatedPathSum {
                 *poly = BooleanPoly::from_terms(new_terms);
             }
 
+            // Mutate continuous terms in-place (Zero Allocation)
+            for parity in &mut self.continuous_poly.parities {
+                for t in &mut parity.terms {
+                    *t = remap_mono(*t);
+                }
+                // Remapping alters the numerical bit values, so we must re-sort
+                // internally to maintain GF(2) BooleanPoly canonicity.
+                parity.terms.sort_unstable();
+                parity.variable_mask = parity.terms.iter().fold(0, |acc, &x| acc | x);
+            }
+
+            // Repacking changes the global sorting order, flagging the need for compaction
+            continuous_needs_compact = true;
+
             let mut new_phase_terms = Vec::with_capacity(self.phase_poly.terms.len());
             for term in &self.phase_poly.terms {
                 new_phase_terms.push(PackedPhaseTerm::create(remap_mono(term.monomial()), term.phase()));
@@ -208,6 +228,11 @@ impl EvaluatedPathSum {
             self.phase_poly.merge_unsorted_batch(new_phase_terms);
             self.num_path_vars = surviving_mask.count_ones();
         }
+
+        // Execute the O(N log N) deterministic sort exactly once per reduction cycle
+        if continuous_needs_compact {
+            self.continuous_poly.compact();
+        }
     }
 }
 
@@ -215,6 +240,7 @@ impl EvaluatedPathSum {
 mod tests {
     use super::*;
     use crate::canonical_phase_poly::EvaluatedPathSum;
+    use smallvec::smallvec;
 
     /// Tests that the sequence H-Z-H, which is equivalent to an X gate,
     /// correctly reduces to the expected state. This is a classic integration test
@@ -330,5 +356,123 @@ mod tests {
         assert_eq!(state.num_path_vars, 0);
         // out_state was v2, now it is x0 + 1
         assert_eq!(state.out_state[0].terms.as_slice(), &[0, 1 << 0]);
+    }
+
+    #[test]
+    fn test_reduction_propagates_to_continuous_poly() {
+        let mut state = EvaluatedPathSum::new_id(2); // q0, q1
+        state.apply_h(0);      // H on q0. q0 state is v2. num_path_vars = 1
+        state.apply_cx(0, 1);    // CX from q0 to q1. q1 state is x1+v2
+        state.apply_rz(1, 1.23); // Rz(1.23) on q1. Parity is x1+v2
+
+        // We want to force a substitution of v2 = x0.
+        // We do this by introducing a dummy path variable v3 and equations
+        // that form v3 * (v2 + x0) = pi.
+        // This means we add Z(v3*v2) and Z(v3*x0)
+        state.num_path_vars += 1;
+        let v2_mask = 1 << 2;
+        let v3_mask = 1 << 3;
+        let x0_mask = 1 << 0;
+        state.phase_poly.merge_unsorted_batch(vec![
+            PackedPhaseTerm::create(v3_mask | v2_mask, 4),
+            PackedPhaseTerm::create(v3_mask | x0_mask, 4),
+        ]);
+
+        // The continuous poly currently has one term with parity (x1+v2)
+        // The reduction will scan v3, find P = v2 + x0, pivot on v2,
+        // and substitute v2 = x0 everywhere.
+        state.reduce();
+
+        // After reduction, v2 is substituted by x0, so the parity becomes (x1+x0)
+        // and surviving path variables (if any) are repacked. In this case, both v2 and v3 are eliminated.
+        let expected_parity = BooleanPoly::from_terms(smallvec![x0_mask, 1 << 1]);
+        assert_eq!(state.continuous_poly.parities.len(), 1);
+        assert_eq!(state.continuous_poly.parities[0], expected_parity);
+        assert_eq!(state.continuous_poly.phases[0], 1.23);
+    }
+
+    #[test]
+    fn test_chained_reduction_with_repacking() {
+        let mut state = EvaluatedPathSum::new_id(3); // q0, q1, q2
+        // Path variables will start at index 3. v3, v4, v5...
+
+        // 1. Entangle and apply Rz
+        state.apply_h(0); // v3 is born. out_state[0] = {v3}
+        state.apply_cx(0, 1); // out_state[1] = {x1, v3}
+        state.apply_rz(1, 1.23); // continuous_poly has parity {x1, v3}
+
+        // 2. First solvable equation: v4 = v3 + x0
+        state.num_path_vars += 1; // v4 is born
+        let v3_mask = 1 << 3;
+        let v4_mask = 1 << 4;
+        let x0_mask = 1 << 0;
+        state.phase_poly.merge_unsorted_batch(vec![
+            PackedPhaseTerm::create(v4_mask | v3_mask, 4),
+            PackedPhaseTerm::create(v4_mask | x0_mask, 4),
+        ]);
+
+        // 3. Second, chained solvable equation: v5 = v4
+        state.num_path_vars += 1; // v5 is born
+        let v5_mask = 1 << 5;
+        state.phase_poly.merge_unsorted_batch(vec![
+            PackedPhaseTerm::create(v5_mask | v4_mask, 4)
+        ]);
+
+        // The reducer will:
+        // - Solve v5=v4, substitute v4=v5. Continuous parity is {x1, v3}.
+        // - Solve v4=v3+x0, substitute v3=v4+x0. Continuous parity becomes {x1, v5, x0}.
+        // - Repack surviving variables. v5 is the only survivor, becomes the new v3.
+        state.reduce();
+
+        // The final continuous parity should be {x0, x1, v3_new}
+        let x1_mask = 1 << 1;
+        let v_repacked_mask = 1 << 3; // The new, repacked path variable
+        let expected_parity = BooleanPoly::from_terms(smallvec![x0_mask, x1_mask, v_repacked_mask]);
+
+        assert_eq!(state.num_path_vars, 1, "Only one path variable should survive");
+        assert_eq!(state.continuous_poly.parities.len(), 1);
+        assert_eq!(state.continuous_poly.parities[0], expected_parity);
+        assert_eq!(state.continuous_poly.phases[0], 1.23);
+    }
+
+    #[test]
+    fn test_multiple_independent_reductions_and_repacking() {
+        let mut state = EvaluatedPathSum::new_id(4); // q0, q1, q2, q3
+        // Path vars start at index 4: v4, v5, v6, v7
+        state.num_path_vars = 4;
+
+        // Continuous phase depends on v4 and v6, which are NOT directly eliminated
+        let initial_parity = BooleanPoly::from_terms(smallvec![1 << 0, 1 << 4, 1 << 6]); // {x0, v4, v6}
+        state.continuous_poly.apply_phase(initial_parity, 1.23);
+
+        // Independent solvable equation #1: v5 = v4
+        let v4_mask = 1 << 4;
+        let v5_mask = 1 << 5;
+        state.phase_poly.merge_unsorted_batch(vec![
+            PackedPhaseTerm::create(v5_mask | v4_mask, 4)
+        ]);
+
+        // Independent solvable equation #2: v7 = v6
+        let v6_mask = 1 << 6;
+        let v7_mask = 1 << 7;
+        state.phase_poly.merge_unsorted_batch(vec![
+            PackedPhaseTerm::create(v7_mask | v6_mask, 4)
+        ]);
+
+        // Reducer will eliminate v4 and v6 by substituting them with v5 and v7.
+        // The surviving path variables are v5 and v7.
+        // They will be repacked to become the new v4 and v5.
+        state.reduce();
+
+        assert_eq!(state.num_path_vars, 2, "Two path variables should survive");
+
+        // The original parity {x0, v4, v6} should be remapped to {x0, v4_new, v5_new}
+        let x0_mask = 1 << 0;
+        let v4_repacked_mask = 1 << 4; // v5 becomes the new first path var
+        let v5_repacked_mask = 1 << 5; // v7 becomes the new second path var
+        let expected_parity = BooleanPoly::from_terms(smallvec![x0_mask, v4_repacked_mask, v5_repacked_mask]);
+
+        assert_eq!(state.continuous_poly.parities.len(), 1);
+        assert_eq!(state.continuous_poly.parities[0], expected_parity);
     }
 }

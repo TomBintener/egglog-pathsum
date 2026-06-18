@@ -415,31 +415,32 @@ mod tests {
     #[test]
     fn test_s_sdg_identity() {
         let mut state = EvaluatedPathSum::new_id(1);
-        let initial_state = state.clone();
+        // state has eq but continuous_poly generates a diff on each call
+        let initial_state = EvaluatedPathSum::new_id(1);
         state.apply_s(0);
         state.apply_sdg(0);
-        assert_eq!(state, initial_state);
+        assert!(state == initial_state);
 
         let mut state2 = EvaluatedPathSum::new_id(1);
-        let initial_state2 = state2.clone();
+        let initial_state2 = EvaluatedPathSum::new_id(1);
         state2.apply_sdg(0);
         state2.apply_s(0);
-        assert_eq!(state2, initial_state2);
+        assert!(state2 == initial_state2);
     }
 
     #[test]
     fn test_t_tdg_identity() {
         let mut state = EvaluatedPathSum::new_id(1);
-        let initial_state = state.clone();
+        let initial_state = EvaluatedPathSum::new_id(1);
         state.apply_t(0);
         state.apply_tdg(0);
-        assert_eq!(state, initial_state);
+        assert!(state == initial_state);
 
         let mut state2 = EvaluatedPathSum::new_id(1);
-        let initial_state2 = state2.clone();
+        let initial_state2 = EvaluatedPathSum::new_id(1);
         state2.apply_tdg(0);
         state2.apply_t(0);
-        assert_eq!(state2, initial_state2);
+        assert!(state2 == initial_state2);
     }
 
     #[test]
@@ -454,6 +455,78 @@ mod tests {
         state_hsh.apply_h(0);
         state_hsh.reduce();
 
-        assert_eq!(state_sx, state_hsh);
+        assert!(state_sx == state_hsh);
+    }
+
+    #[test]
+    fn test_apply_rz_simple() {
+        let mut state = EvaluatedPathSum::new_id(1);
+        state.apply_rz(0, 1.23);
+        assert_eq!(state.continuous_poly.parities.len(), 1);
+        assert_eq!(state.continuous_poly.phases[0], 1.23);
+        assert_eq!(state.continuous_poly.parities[0], BooleanPoly::from_terms(smallvec::smallvec![1 << 0]));
+    }
+
+    #[test]
+    fn test_apply_rz_merges() {
+        let mut state = EvaluatedPathSum::new_id(1);
+        state.apply_rz(0, 1.0);
+        state.apply_rz(0, 0.5);
+        assert_eq!(state.continuous_poly.parities.len(), 1);
+        assert!((state.continuous_poly.phases[0] - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_apply_rz_on_complex_parity() {
+        let mut state = EvaluatedPathSum::new_id(2);
+        state.apply_cx(0, 1); // q1 now has parity (x0 + x1)
+        state.apply_rz(1, 1.23);
+
+        let expected_parity = BooleanPoly::from_terms(smallvec::smallvec![1 << 0, 1 << 1]);
+        assert_eq!(state.continuous_poly.parities[0], expected_parity);
+        assert_eq!(state.continuous_poly.phases[0], 1.23);
+    }
+
+    #[test]
+    fn test_rz_with_reduction() {
+        let mut state = EvaluatedPathSum::new_id(1);
+        // Apply Rz with a parity of x0
+        state.apply_rz(0, 1.23);
+        // Circuit: H-Z-H on q0, which is equivalent to X on q0
+        state.apply_h(0);
+        state.apply_z(0);
+        state.apply_h(0);
+        // This reduction should not affect the continuous poly, since its parity is x0
+        state.reduce();
+
+        assert_eq!(state.continuous_poly.parities.len(), 1);
+        assert_eq!(state.continuous_poly.parities[0], BooleanPoly::from_terms(smallvec::smallvec![1 << 0]));
+    }
+
+    #[test]
+    fn test_rz_on_superposition_with_reduction() {
+        let mut state = EvaluatedPathSum::new_id(1);
+        // Create a superposition on q0
+        state.apply_h(0); // q0's state is now v1 (a path variable)
+        // Apply an Rz gate to this superposition state
+        state.apply_rz(0, 1.23);
+
+        // The continuous poly should have a parity of v1
+        let v1_mask = 1 << 1;
+        assert_eq!(state.continuous_poly.parities[0], BooleanPoly::from_terms(smallvec::smallvec![v1_mask]));
+
+        // Now, complete an H-Z-H sequence, which will trigger a reduction
+        // that solves for v1.
+        state.apply_z(0);
+        state.apply_h(0);
+        state.reduce();
+
+        // The reduction should have substituted v1 in the continuous poly.
+        // The exact substitution depends on the reduction logic, but it should no longer be v1.
+        // In this case, HZH is X, so the original state x0 becomes x0+1.
+        // The path variable v1 gets solved to x0.
+        let expected_parity = BooleanPoly::from_terms(smallvec::smallvec![1 << 0]);
+        assert_eq!(state.continuous_poly.parities[0], expected_parity);
+        assert_eq!(state.continuous_poly.phases[0], 1.23);
     }
 }
