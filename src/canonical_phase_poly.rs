@@ -5,6 +5,7 @@
 //! structures are crucial in quantum compilation and path sum evaluation for efficiently
 //! tracking the accumulated phases and output states of qubits.
 
+use crate::continuous_poly::ContinuousPhasePoly;
 use std::cmp::Ordering;
 use smallvec::SmallVec;
 
@@ -142,13 +143,23 @@ impl CanonicalPhasePoly {
 ///
 /// It stores a sorted list of variables or monomials (represented as `u64`).
 /// Addition of polynomials behaves like XOR (since a + a = 0 in GF(2)).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BooleanPoly {
     /// The sorted list of terms (monomials) present in the polynomial.
     pub terms: SmallVec<[u64; 8]>,
+    /// A bitmask representing the union of all variables present in `terms`.
+    pub variable_mask: u64,
 }
 
 impl BooleanPoly {
+    /// Creates a new `BooleanPoly` from a set of terms.
+    /// The terms are automatically sorted and the variable mask is computed.
+    pub fn from_terms(mut terms: SmallVec<[u64; 8]>) -> Self {
+        terms.sort_unstable();
+        let variable_mask = terms.iter().fold(0, |acc, &x| acc | x);
+        Self { terms, variable_mask }
+    }
+
     /// Adds another boolean polynomial to this one in place over GF(2).
     ///
     /// This performs a linear-time merge of the two sorted term lists.
@@ -182,6 +193,8 @@ impl BooleanPoly {
         result.extend_from_slice(&self.terms[i..]);
         result.extend_from_slice(&other.terms[j..]);
         self.terms = result;
+        // Recalculate the mask after the merge.
+        self.variable_mask = self.terms.iter().fold(0, |acc, &x| acc | x);
     }
 }
 
@@ -200,6 +213,8 @@ pub struct EvaluatedPathSum {
     pub out_state: Vec<BooleanPoly>,
     /// The canonical phase polynomial representing the accumulated phases.
     pub phase_poly: CanonicalPhasePoly,
+    /// The passenger pipeline for continuous phase parameters.
+    pub continuous_poly: ContinuousPhasePoly,
 }
 
 #[cfg(test)]
@@ -350,19 +365,13 @@ mod tests {
     /// those terms out, mirroring GF(2) addition (XOR) where a + a = 0.
     #[test]
     fn test_boolean_poly_add_assign_cancels() {
-        let mut poly_a = BooleanPoly {
-            terms: smallvec![1, 3, 5],
-        };
-        let poly_b = BooleanPoly {
-            terms: smallvec![1, 4, 5],
-        };
+        let mut poly_a = BooleanPoly::from_terms(smallvec![1, 3, 5]);
+        let poly_b = BooleanPoly::from_terms(smallvec![1, 4, 5]);
 
         poly_a.add_assign(&poly_b);
 
         // 1 and 5 should cancel out. 3 and 4 should remain, sorted.
-        let expected = BooleanPoly {
-            terms: smallvec![3, 4],
-        };
+        let expected = BooleanPoly::from_terms(smallvec![3, 4]);
         assert_eq!(poly_a, expected);
     }
 
@@ -370,19 +379,13 @@ mod tests {
     /// that contains all terms from both, correctly sorted.
     #[test]
     fn test_boolean_poly_add_assign_disjoint() {
-        let mut poly_a = BooleanPoly {
-            terms: smallvec![1, 3, 5],
-        };
-        let poly_b = BooleanPoly {
-            terms: smallvec![2, 4, 6],
-        };
+        let mut poly_a = BooleanPoly::from_terms(smallvec![1, 3, 5]);
+        let poly_b = BooleanPoly::from_terms(smallvec![2, 4, 6]);
 
         poly_a.add_assign(&poly_b);
 
         // Should just be the sorted merge of the two.
-        let expected = BooleanPoly {
-            terms: smallvec![1, 2, 3, 4, 5, 6],
-        };
+        let expected = BooleanPoly::from_terms(smallvec![1, 2, 3, 4, 5, 6]);
         assert_eq!(poly_a, expected);
     }
 
@@ -390,18 +393,12 @@ mod tests {
     /// identity operation, leaving the original polynomial unchanged.
     #[test]
     fn test_boolean_poly_add_assign_identity() {
-        let mut poly_a = BooleanPoly {
-            terms: smallvec![1, 2, 3],
-        };
-        let poly_b = BooleanPoly {
-            terms: smallvec![],
-        };
+        let mut poly_a = BooleanPoly::from_terms(smallvec![1, 2, 3]);
+        let poly_b = BooleanPoly::from_terms(smallvec![]);
 
         poly_a.add_assign(&poly_b);
 
-        let expected = BooleanPoly {
-            terms: smallvec![1, 2, 3],
-        };
+        let expected = BooleanPoly::from_terms(smallvec![1, 2, 3]);
         assert_eq!(poly_a, expected);
     }
 
@@ -414,8 +411,8 @@ mod tests {
         };
 
         let out_state = vec![
-            BooleanPoly { terms: smallvec![1, 2] },
-            BooleanPoly { terms: smallvec![3] },
+            BooleanPoly::from_terms(smallvec![1, 2]),
+            BooleanPoly::from_terms(smallvec![3]),
         ];
 
         let path_sum = EvaluatedPathSum {
@@ -423,6 +420,7 @@ mod tests {
             num_path_vars: 1,
             out_state: out_state.clone(),
             phase_poly: phase_poly.clone(),
+            continuous_poly: ContinuousPhasePoly::new(),
         };
 
         assert_eq!(path_sum.num_qubits, 2);
@@ -462,27 +460,19 @@ mod tests {
     /// edge cases where either the receiver or the argument is completely empty.
     #[test]
     fn test_boolean_poly_add_assign_empty() {
-        let mut poly_a = BooleanPoly {
-            terms: smallvec![],
-        };
-
-        let poly_b = BooleanPoly {
-            terms: smallvec![1, 2],
-        };
+        let mut poly_a = BooleanPoly::from_terms(smallvec![]);
+        let poly_b = BooleanPoly::from_terms(smallvec![1, 2]);
 
         poly_a.add_assign(&poly_b);
         assert_eq!(poly_a.terms.as_slice(), &[1, 2]);
+        assert_eq!(poly_a.variable_mask, 1 | 2);
 
-        let mut poly_c = BooleanPoly {
-            terms: smallvec![1, 2],
-        };
-
-        let poly_d = BooleanPoly {
-            terms: smallvec![],
-        };
+        let mut poly_c = BooleanPoly::from_terms(smallvec![1, 2]);
+        let poly_d = BooleanPoly::from_terms(smallvec![]);
 
         poly_c.add_assign(&poly_d);
         assert_eq!(poly_c.terms.as_slice(), &[1, 2]);
+        assert_eq!(poly_c.variable_mask, 1 | 2);
     }
 
     /// Tests the `merge_unsorted_batch` method to ensure it correctly sorts,
@@ -520,5 +510,27 @@ mod tests {
         ];
 
         assert_eq!(poly.terms.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn test_variable_mask_creation() {
+        let poly = BooleanPoly::from_terms(smallvec![(1 << 2) | (1 << 5), 1 << 3]);
+        // The mask should be the bitwise OR of all terms
+        let expected_mask = (1 << 2) | (1 << 5) | (1 << 3);
+        assert_eq!(poly.variable_mask, expected_mask);
+    }
+
+    #[test]
+    fn test_variable_mask_cancellation() {
+        let mut poly_a = BooleanPoly::from_terms(smallvec![(1 << 1) | (1 << 2), 1 << 3]);
+        let poly_b = BooleanPoly::from_terms(smallvec![(1 << 1) | (1 << 2), 1 << 4]);
+
+        // The term (1 << 1) | (1 << 2) should cancel out
+        poly_a.add_assign(&poly_b);
+
+        let expected_poly = BooleanPoly::from_terms(smallvec![1 << 3, 1 << 4]);
+        assert_eq!(poly_a, expected_poly);
+        // The mask should only contain the remaining variables
+        assert_eq!(poly_a.variable_mask, (1 << 3) | (1 << 4));
     }
 }

@@ -6,6 +6,7 @@
 //! phase polynomial (represented in a canonical form).
 
 use crate::canonical_phase_poly::{BooleanPoly, CanonicalPhasePoly, EvaluatedPathSum, PackedPhaseTerm};
+use crate::continuous_poly::ContinuousPhasePoly;
 
 impl EvaluatedPathSum {
     /// Creates a new identity `EvaluatedPathSum` for a given number of qubits.
@@ -16,9 +17,7 @@ impl EvaluatedPathSum {
     pub fn new_id(num_qubits: u32) -> Self {
         let mut out_state = Vec::with_capacity(num_qubits as usize);
         for i in 0..num_qubits {
-            out_state.push(BooleanPoly {
-                terms: smallvec::smallvec![1 << i],
-            });
+            out_state.push(BooleanPoly::from_terms(smallvec::smallvec![1 << i]));
         }
 
         Self {
@@ -26,6 +25,7 @@ impl EvaluatedPathSum {
             num_path_vars: 0,
             out_state,
             phase_poly: CanonicalPhasePoly { terms: smallvec::smallvec![] },
+            continuous_poly: ContinuousPhasePoly::new(),
         }
     }
 
@@ -35,7 +35,7 @@ impl EvaluatedPathSum {
     /// adding the constant `1` (represented as the monomial `0`) in GF(2)
     /// to the target qubit's boolean polynomial.
     pub fn apply_x(&mut self, q: usize) {
-        let constant_one = BooleanPoly { terms: smallvec::smallvec![0] };
+        let constant_one = BooleanPoly::from_terms(smallvec::smallvec![0]);
         self.out_state[q].add_assign(&constant_one);
     }
 
@@ -185,9 +185,7 @@ impl EvaluatedPathSum {
 
         let old_state = std::mem::replace(
             &mut self.out_state[q],
-            BooleanPoly {
-                terms: smallvec::smallvec![v_mask],
-            },
+            BooleanPoly::from_terms(smallvec::smallvec![v_mask]),
         );
 
         let mut batch = Vec::with_capacity(old_state.terms.len());
@@ -195,6 +193,15 @@ impl EvaluatedPathSum {
             batch.push(PackedPhaseTerm::create(t | v_mask, 4));
         }
         self.phase_poly.merge_unsorted_batch(batch);
+    }
+
+    /// Applies a continuous Rz gate to the specified qubit.
+    pub fn apply_rz(&mut self, q: usize, theta: f64) {
+        // 1. Capture the exact Boolean parity of the target qubit at this moment
+        let current_parity = self.out_state[q].clone();
+
+        // 2. Append the parity and the rotation angle to the lazy continuous pipeline
+        self.continuous_poly.apply_phase(current_parity, theta);
     }
 }
 
@@ -215,6 +222,7 @@ mod tests {
         assert_eq!(state.out_state[1].terms.as_slice(), &[1 << 1]);
         assert_eq!(state.out_state[2].terms.as_slice(), &[1 << 2]);
         assert!(state.phase_poly.terms.is_empty());
+        assert!(state.continuous_poly.parities.is_empty());
     }
 
     /// Tests that the Pauli X gate correctly flips the state of a qubit
@@ -277,7 +285,7 @@ mod tests {
     #[test]
     fn test_apply_z() {
         let mut state = EvaluatedPathSum::new_id(1);
-        state.out_state[0].terms = smallvec::smallvec![1, 2, 4]; // x0 + x1 + x2
+        state.out_state[0] = BooleanPoly::from_terms(smallvec::smallvec![1, 2, 4]); // x0 + x1 + x2
         state.apply_z(0);
         // Phase poly should contain Z(x0+x1+x2) = Z(x0)Z(x1)Z(x2)
         // = exp(i*pi*(x0+x1+x2))
@@ -297,7 +305,7 @@ mod tests {
     #[test]
     fn test_apply_s() {
         let mut state = EvaluatedPathSum::new_id(1);
-        state.out_state[0].terms = smallvec::smallvec![1, 2]; // x0 + x1
+        state.out_state[0] = BooleanPoly::from_terms(smallvec::smallvec![1, 2]); // x0 + x1
         state.apply_s(0);
         // S(x0+x1) = S(x0)S(x1)Z(x0)Z(x1)
         // Phases:
@@ -318,7 +326,7 @@ mod tests {
     #[test]
     fn test_apply_t() {
         let mut state = EvaluatedPathSum::new_id(1);
-        state.out_state[0].terms = smallvec::smallvec![1, 2, 4]; // x0 + x1 + x2
+        state.out_state[0] = BooleanPoly::from_terms(smallvec::smallvec![1, 2, 4]); // x0 + x1 + x2
         state.apply_t(0);
         // T(x0+x1+x2) = T(x0)T(x1)T(x2) S(x0)S(x1)S(x2)Z(x0x1x2)
         // Phases:
@@ -345,7 +353,7 @@ mod tests {
     #[test]
     fn test_apply_h() {
         let mut state = EvaluatedPathSum::new_id(1);
-        state.out_state[0].terms = smallvec::smallvec![1, 2]; // x0 + x1
+        state.out_state[0] = BooleanPoly::from_terms(smallvec::smallvec![1, 2]); // x0 + x1
         state.apply_h(0);
 
         // New path variable `v` is introduced at index 1 (since num_qubits=1)
@@ -396,7 +404,7 @@ mod tests {
     fn test_phase_on_constant() {
         let mut state = EvaluatedPathSum::new_id(1);
         // Set the state to a constant 1 (monomial 0)
-        state.out_state[0].terms = smallvec::smallvec![0];
+        state.out_state[0] = BooleanPoly::from_terms(smallvec::smallvec![0]);
         state.apply_s(0);
 
         // S gate on a constant 1 should add a global phase of pi/2

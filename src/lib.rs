@@ -45,6 +45,7 @@ mod evaluator;
 mod reduction;
 mod sugar;
 pub mod app;
+mod continuous_poly;
 
 pub use sugar::*;
 

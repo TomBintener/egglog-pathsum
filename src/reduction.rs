@@ -12,7 +12,7 @@
 //! contiguous set.
 
 use crate::canonical_phase_poly::{BooleanPoly, EvaluatedPathSum, PackedPhaseTerm};
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 
 impl BooleanPoly {
     /// Creates a `BooleanPoly` from a bitmask representation.
@@ -32,8 +32,7 @@ impl BooleanPoly {
             terms.push(1u64 << bit);
             var_mask &= var_mask - 1; // Clear lowest set bit
         }
-        terms.sort_unstable();
-        BooleanPoly { terms }
+        BooleanPoly::from_terms(terms)
     }
 }
 
@@ -77,7 +76,7 @@ impl EvaluatedPathSum {
                     continue;
                 }
 
-                if self.out_state.iter().any(|poly| poly.terms.iter().any(|&t| t == v_mask)) {
+                if self.out_state.iter().any(|poly| (poly.variable_mask & v_mask) != 0) {
                     continue;
                 }
 
@@ -119,7 +118,10 @@ impl EvaluatedPathSum {
                 let e_poly = BooleanPoly::from_mask(e_mask);
 
                 for poly in &mut self.out_state {
-                    let mut b_poly = BooleanPoly { terms: SmallVec::new() };
+                    if (poly.variable_mask & u_mask) == 0 {
+                        continue;
+                    }
+                    let mut b_poly = BooleanPoly::from_terms(SmallVec::new());
                     poly.terms.retain(|t| {
                         if (*t & u_mask) != 0 {
                             b_poly.terms.push(*t & !u_mask);
@@ -128,9 +130,11 @@ impl EvaluatedPathSum {
                             true
                         }
                     });
+                    b_poly.variable_mask = b_poly.terms.iter().fold(0, |acc, &x| acc | x);
+
 
                     if !b_poly.terms.is_empty() {
-                        let mut eb_poly = BooleanPoly { terms: SmallVec::new() };
+                        let mut eb_poly = BooleanPoly::from_terms(SmallVec::new());
                         for e_term in &e_poly.terms {
                             let mut shifted_b = b_poly.clone();
                             if *e_term != 0 {
@@ -192,12 +196,8 @@ impl EvaluatedPathSum {
             };
 
             for poly in &mut self.out_state {
-                let mut new_terms = smallvec![];
-                for term in &poly.terms {
-                    new_terms.push(remap_mono(*term));
-                }
-                new_terms.sort_unstable();
-                poly.terms = new_terms;
+                let new_terms = poly.terms.iter().map(|t| remap_mono(*t)).collect();
+                *poly = BooleanPoly::from_terms(new_terms);
             }
 
             let mut new_phase_terms = Vec::with_capacity(self.phase_poly.terms.len());
