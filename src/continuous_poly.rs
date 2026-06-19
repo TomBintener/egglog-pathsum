@@ -162,8 +162,6 @@ impl ContinuousPhasePoly {
                 parity.add_assign(&eb_poly);
             }
         }
-        // Guarantee canonicity before returning to the e-graph
-        self.compact();
     }
 }
 

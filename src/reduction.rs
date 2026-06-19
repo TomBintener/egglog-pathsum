@@ -67,6 +67,7 @@ impl EvaluatedPathSum {
                 & u64::MAX.checked_shr(64 - (self.num_qubits + original_num_path_vars) as u32).unwrap_or(0)
         };
 
+        let mut global_out_mask = self.out_state.iter().fold(0, |acc, p| acc | p.variable_mask);
         let mut continuous_needs_compact = false;
         let mut changed = true;
         while changed {
@@ -77,7 +78,7 @@ impl EvaluatedPathSum {
                     continue;
                 }
 
-                if self.out_state.iter().any(|poly| (poly.variable_mask & v_mask) != 0) {
+                if (global_out_mask & v_mask) != 0 {
                     continue;
                 }
 
@@ -118,36 +119,31 @@ impl EvaluatedPathSum {
 
                 let e_poly = BooleanPoly::from_mask(e_mask);
 
+                let mut out_state_changed = false;
                 for poly in &mut self.out_state {
-                    if (poly.variable_mask & u_mask) == 0 {
-                        continue;
-                    }
-                    let mut b_poly = BooleanPoly::from_terms(SmallVec::new());
-                    poly.terms.retain(|t| {
-                        if (*t & u_mask) != 0 {
-                            b_poly.terms.push(*t & !u_mask);
-                            false
-                        } else {
-                            true
-                        }
-                    });
-                    b_poly.variable_mask = b_poly.terms.iter().fold(0, |acc, &x| acc | x);
+                    if (poly.variable_mask & u_mask) == 0 { continue; }
+                    out_state_changed = true;
 
-
-                    if !b_poly.terms.is_empty() {
-                        let mut eb_poly = BooleanPoly::from_terms(SmallVec::new());
-                        for e_term in &e_poly.terms {
-                            let mut shifted_b = b_poly.clone();
-                            if *e_term != 0 {
-                                for b in &mut shifted_b.terms {
-                                    *b |= *e_term;
-                                }
-                                shifted_b.terms.sort_unstable();
+                    let mut terms_to_add = SmallVec::<[u64; 16]>::new();
+                    for &t in &poly.terms {
+                        if (t & u_mask) != 0 {
+                            let base = t & !u_mask;
+                            for &e_term in &e_poly.terms {
+                                let new_t = if e_term == 0 { base } else { base | e_term };
+                                terms_to_add.push(new_t);
                             }
-                            eb_poly.add_assign(&shifted_b);
                         }
-                        poly.add_assign(&eb_poly);
                     }
+
+                    if !terms_to_add.is_empty() {
+                        poly.terms.retain(|t| (*t & u_mask) == 0);
+                        poly.terms.extend(terms_to_add);
+                        *poly = BooleanPoly::from_terms(poly.terms.clone());
+                    }
+                }
+
+                if out_state_changed {
+                    global_out_mask = self.out_state.iter().fold(0, |acc, p| acc | p.variable_mask);
                 }
 
                 // Substitute continuously, but defer compaction

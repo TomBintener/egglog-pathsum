@@ -25,7 +25,6 @@ use egglog::sort::{BaseValues, Boxed, S};
 use egglog::{add_primitive, EGraph, Value};
 use egglog::ast::Literal;
 use egglog::{TermId, TermDag};
-use tracing::instrument;
 
 /// The memory-safe wrapper for `EvaluatedPathSum` that is passed to `egglog`.
 ///
@@ -43,7 +42,6 @@ pub struct PathSumSort;
 /// Creates an initial identity path sum state with the given number of qubits.
 ///
 /// If `num_qubits` is less than or equal to 0, it safely defaults to a 0-qubit state.
-#[instrument(skip(num_qubits))]
 pub fn id_pathsum_logic(num_qubits: i64) -> PSum {
     if num_qubits <= 0 {
         PSum::new(EvaluatedPathSum::new_id(0))
@@ -56,12 +54,11 @@ pub fn id_pathsum_logic(num_qubits: i64) -> PSum {
 ///
 /// Includes an FFI panic shield: if `q` is out of bounds, the state is returned unchanged.
 /// Eagerly reduces the state after application to maintain canonicity.
-#[instrument(skip(state))]
 pub fn apply_x_logic(state: PSum, q: i64) -> PSum {
-    let mut new_state = (*state).clone();
-    if q < 0 || q as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield: Zero-allocation rejection
     }
+    let mut new_state = (*state).clone();
     new_state.apply_x(q as usize);
     new_state.reduce();
     PSum::new(new_state)
@@ -71,12 +68,11 @@ pub fn apply_x_logic(state: PSum, q: i64) -> PSum {
 ///
 /// Includes an FFI panic shield: if `q` is out of bounds, the state is returned unchanged.
 /// Eagerly reduces the state after application to maintain canonicity.
-#[instrument(skip(state))]
 pub fn apply_z_logic(state: PSum, q: i64) -> PSum {
-    let mut new_state = (*state).clone();
-    if q < 0 || q as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield
     }
+    let mut new_state = (*state).clone();
     new_state.apply_z(q as usize);
     new_state.reduce();
     PSum::new(new_state)
@@ -86,24 +82,22 @@ pub fn apply_z_logic(state: PSum, q: i64) -> PSum {
 ///
 /// Includes an FFI panic shield: if `q` is out of bounds, the state is returned unchanged.
 /// Eagerly reduces the state after application to maintain canonicity.
-#[instrument(skip(state))]
 pub fn apply_s_logic(state: PSum, q: i64) -> PSum {
-    let mut new_state = (*state).clone();
-    if q < 0 || q as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield
     }
+    let mut new_state = (*state).clone();
     new_state.apply_s(q as usize);
     new_state.reduce();
     PSum::new(new_state)
 }
 
 /// Applies an S-dagger gate to the path sum state at the specified qubit.
-#[instrument(skip(state))]
 pub fn apply_sdg_logic(state: PSum, q: i64) -> PSum {
-    let mut new_state = (*state).clone();
-    if q < 0 || q as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield
     }
+    let mut new_state = (*state).clone();
     new_state.apply_sdg(q as usize);
     new_state.reduce();
     PSum::new(new_state)
@@ -113,36 +107,33 @@ pub fn apply_sdg_logic(state: PSum, q: i64) -> PSum {
 ///
 /// Includes an FFI panic shield: if `q` is out of bounds, the state is returned unchanged.
 /// Eagerly reduces the state after application to maintain canonicity.
-#[instrument(skip(state))]
 pub fn apply_t_logic(state: PSum, q: i64) -> PSum {
-    let mut new_state = (*state).clone();
-    if q < 0 || q as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield
     }
+    let mut new_state = (*state).clone();
     new_state.apply_t(q as usize);
     new_state.reduce();
     PSum::new(new_state)
 }
 
 /// Applies a T-dagger gate to the path sum state at the specified qubit.
-#[instrument(skip(state))]
 pub fn apply_tdg_logic(state: PSum, q: i64) -> PSum {
-    let mut new_state = (*state).clone();
-    if q < 0 || q as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield
     }
+    let mut new_state = (*state).clone();
     new_state.apply_tdg(q as usize);
     new_state.reduce();
     PSum::new(new_state)
 }
 
 /// Applies a square-root-of-X gate to the path sum state at the specified qubit.
-#[instrument(skip(state))]
 pub fn apply_sx_logic(state: PSum, q: i64) -> PSum {
-    let mut new_state = (*state).clone();
-    if q < 0 || q as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield
     }
+    let mut new_state = (*state).clone();
     new_state.apply_sx(q as usize);
     new_state.reduce();
     PSum::new(new_state)
@@ -153,14 +144,13 @@ pub fn apply_sx_logic(state: PSum, q: i64) -> PSum {
 /// Includes FFI panic shields: if the control and target are the same,
 /// or if either is out of bounds, the state is returned unchanged.
 /// Eagerly reduces the state after application to maintain canonicity.
-#[instrument(skip(state))]
 pub fn apply_cx_logic(state: PSum, qc: i64, qt: i64) -> PSum {
-    let mut new_state = (*state).clone();
     if qc == qt || qc < 0 || qt < 0 ||
-       qc as usize >= new_state.num_qubits as usize ||
-       qt as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+       qc as usize >= state.num_qubits as usize ||
+       qt as usize >= state.num_qubits as usize {
+        return state; // FFI Shield: Zero-allocation rejection
     }
+    let mut new_state = (*state).clone();
     new_state.apply_cx(qc as usize, qt as usize);
     new_state.reduce();
     PSum::new(new_state)
@@ -171,14 +161,25 @@ pub fn apply_cx_logic(state: PSum, qc: i64, qt: i64) -> PSum {
 /// Includes an FFI panic shield: if `q` is out of bounds, the state is returned unchanged.
 /// Eagerly reduces the state after application to integrate out temporary path variables
 /// and maintain canonicity.
-#[instrument(skip(state))]
 pub fn apply_h_logic(state: PSum, q: i64) -> PSum {
-    let mut new_state = (*state).clone();
-    if q < 0 || q as usize >= new_state.num_qubits as usize {
-        return PSum::new(new_state); // FFI Shield
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield
     }
+    let mut new_state = (*state).clone();
     new_state.apply_h(q as usize);
     new_state.reduce();
+    PSum::new(new_state)
+}
+
+/// Applies a continuous Rz gate without triggering GF(2) reduction.
+pub fn apply_rz_logic(state: PSum, q: i64, theta_bits: i64) -> PSum {
+    if q < 0 || q as usize >= state.num_qubits as usize {
+        return state; // FFI Shield
+    }
+
+    let mut new_state = (*state).clone();
+    new_state.apply_rz(q as usize, f64::from_bits(theta_bits as u64));
+
     PSum::new(new_state)
 }
 
@@ -238,6 +239,10 @@ impl BaseSort for PathSumSort {
             apply_h_logic(state, q)
         });
 
+        add_primitive!(eg, "rust_apply_rz_ffi" = |state: PSum, q: i64, theta_bits: i64| -> PSum {
+            apply_rz_logic(state, q, theta_bits)
+        });
+
         add_primitive!(eg, "rust_pathsum_debug" = |state: PSum| -> S {
             debug_logic(state)
         });
@@ -257,14 +262,14 @@ impl BaseSort for PathSumSort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canonical_phase_poly::EvaluatedPathSum;
+    use crate::new_experimental_egraph;
 
     /// Verifies that the custom `PathSum` sort and its initialization primitive
     /// (`rust_id_pathsum_ffi`) are correctly registered and callable from within
     /// an `egglog` script.
     #[test]
     fn test_bridge_initialization() {
-        let mut eg = crate::new_experimental_egraph();
+        let mut eg = new_experimental_egraph();
         let script = r#"(let state (rust_id_pathsum_ffi 2))"#;
         let result = eg.parse_and_run_program(None, script);
         assert!(result.is_ok(), "Failed to run rust_id_pathsum through egglog: {:?}", result);
@@ -274,8 +279,9 @@ mod tests {
     /// from within an `egglog` script without raising errors.
     #[test]
     fn test_bridge_all_primitives_callable() {
-        let mut eg = crate::new_experimental_egraph();
-        let script = r#"
+        let mut eg = new_experimental_egraph();
+        let theta = 1.23f64;
+        let script = format!(r#"
             (let state0 (rust_id_pathsum_ffi 2))
             (let state1 (rust_apply_x_ffi state0 0))
             (let state2 (rust_apply_z_ffi state1 0))
@@ -286,9 +292,10 @@ mod tests {
             (let state7 (rust_apply_sdg_ffi state6 1))
             (let state8 (rust_apply_tdg_ffi state7 1))
             (let state9 (rust_apply_sx_ffi state8 0))
-            (let debug_str (rust_pathsum_debug state9))
-        "#;
-        let result = eg.parse_and_run_program(None, script);
+            (let state10 (rust_apply_rz_ffi state9 1 {}))
+            (let debug_str (rust_pathsum_debug state10))
+        "#, theta.to_bits());
+        let result = eg.parse_and_run_program(None, &script);
         assert!(result.is_ok(), "Failed to run primitives through egglog: {:?}", result);
     }
 
@@ -319,6 +326,8 @@ mod tests {
         assert_eq!(*apply_tdg_logic(initial.clone(), 1), *initial);
         assert_eq!(*apply_sx_logic(initial.clone(), 1), *initial);
         assert_eq!(*apply_h_logic(initial.clone(), 1), *initial);
+        assert_eq!(*apply_rz_logic(initial.clone(), 1, 1.23f64.to_bits() as i64), *initial);
+        assert_eq!(*apply_rz_logic(initial.clone(), -1, 1.23f64.to_bits() as i64), *initial);
 
         // CX requires two distinct, in-bounds qubits
         assert_eq!(*apply_cx_logic(initial.clone(), 0, 1), *initial); // qt out of bounds
