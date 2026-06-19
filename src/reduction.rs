@@ -36,34 +36,6 @@ impl BooleanPoly {
     }
 }
 
-/// A helper function to perform a substitution on a single BooleanPoly.
-fn substitute_in_poly(poly: &mut BooleanPoly, var_to_replace: u64, expr: &BooleanPoly) {
-    if (poly.variable_mask & var_to_replace) == 0 {
-        return;
-    }
-
-    let mut terms_to_add = SmallVec::<[u64; 16]>::new();
-    poly.terms.retain(|t| {
-        if (*t & var_to_replace) != 0 {
-            let base = *t & !var_to_replace;
-            for &e_term in &expr.terms {
-                let new_t = if e_term == 0 { base } else { base | e_term };
-                terms_to_add.push(new_t);
-            }
-            false // Remove the original term
-        } else {
-            true // Keep the term
-        }
-    });
-
-    if !terms_to_add.is_empty() {
-        poly.terms.extend(terms_to_add);
-        // This re-sorts and re-calculates the mask
-        *poly = BooleanPoly::from_terms(poly.terms.clone());
-    }
-}
-
-
 impl EvaluatedPathSum {
     /// Reduces the path sum by integrating out internal variables using Gaussian elimination.
     ///
@@ -135,47 +107,10 @@ impl EvaluatedPathSum {
                     }
                 }
 
-                if !is_linear_and_phase_pi || p_mask == 0 {
+                if !is_linear_and_phase_pi {
                     continue;
                 }
 
-                // New Strategy: Check for the simple v=u case first.
-                let is_single_path_var = p_mask.count_ones() == 1
-                    && (p_mask & (1u64 << 63)) == 0
-                    && (p_mask & path_var_mask & !dead_vars) == p_mask;
-
-                if is_single_path_var {
-                    // This is the v=u case. Perform a direct substitution v -> u.
-                    let u_mask = p_mask;
-                    let u_poly = BooleanPoly::from_mask(u_mask);
-
-                    // Substitute v -> u in out_state
-                    for poly in &mut self.out_state {
-                        substitute_in_poly(poly, v_mask, &u_poly);
-                    }
-
-                    // Update global mask
-                    global_out_mask = self.out_state.iter().fold(0, |acc, p| acc | p.variable_mask);
-                    for parity in &self.continuous_poly.parities {
-                        global_out_mask |= parity.variable_mask;
-                    }
-
-                    // Substitute v -> u in continuous_poly
-                    self.continuous_poly.substitute(v_mask, &u_poly);
-                    continuous_needs_compact = true;
-
-                    // In phase_poly, the equation v=u comes from terms containing v.
-                    // Since v is linear, it doesn't appear anywhere else. So we just remove those terms.
-                    self.phase_poly.terms.retain(|term| (term.monomial() & v_mask) == 0);
-
-
-                    dead_vars |= v_mask;
-                    changed = true;
-                    continue; // Restart the scan
-                }
-
-
-                // Original Gaussian elimination logic for complex P
                 let valid_pivots = p_mask & path_var_mask & !dead_vars;
                 if valid_pivots == 0 {
                     continue;
@@ -188,27 +123,49 @@ impl EvaluatedPathSum {
 
                 let e_poly = BooleanPoly::from_mask(e_mask);
 
-                // Substitute u -> e in out_state
+                let mut out_state_changed = false;
                 for poly in &mut self.out_state {
-                    substitute_in_poly(poly, u_mask, &e_poly);
+                    if (poly.variable_mask & u_mask) == 0 { continue; }
+                    out_state_changed = true;
+
+                    let mut distributed_terms = SmallVec::<[u64; 8]>::new();
+
+                    poly.terms.retain(|t| {
+                        if (*t & u_mask) != 0 {
+                            let base = *t & !u_mask;
+                            for &e_term in &e_poly.terms {
+                                let new_t = if e_term == 0 { base } else { base | e_term };
+                                distributed_terms.push(new_t);
+                            }
+                            false // Remove the original term from the poly
+                        } else {
+                            true // Keep untouched terms
+                        }
+                    });
+
+                    if !distributed_terms.is_empty() {
+                        // BooleanPoly::add_assign automatically handles GF(2) cancellation!
+                        let addition = BooleanPoly::from_terms(distributed_terms);
+                        poly.add_assign(&addition);
+                    }
                 }
 
-                // Substitute u -> e in continuous_poly
+                if out_state_changed {
+                    global_out_mask = self.out_state.iter().fold(0, |acc, p| acc | p.variable_mask);
+                    for parity in &self.continuous_poly.parities {
+                        global_out_mask |= parity.variable_mask;
+                    }
+                }
+
+                // Substitute continuously, but defer compaction
                 self.continuous_poly.substitute(u_mask, &e_poly);
                 continuous_needs_compact = true;
 
-                // Update global out mask
-                global_out_mask = self.out_state.iter().fold(0, |acc, p| acc | p.variable_mask);
-                for parity in &self.continuous_poly.parities {
-                    global_out_mask |= parity.variable_mask;
-                }
-
-                // Substitute u -> e in phase_poly
                 let mut next_gen_terms = Vec::new();
                 for term in self.phase_poly.terms.iter() {
                     let mono = term.monomial();
                     if (mono & v_mask) != 0 {
-                        continue; // This is the equation we are solving, so it's removed.
+                        continue;
                     }
                     if (mono & u_mask) != 0 {
                         let base = mono & !u_mask;
