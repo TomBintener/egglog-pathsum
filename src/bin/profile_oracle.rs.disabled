@@ -1,0 +1,8 @@
+use egglog_experimental::app::OracleApp;
+use std::path::PathBuf;
+
+fn main() {
+    let filename = std::env::args().nth(1).unwrap();
+    let app = OracleApp::new(PathBuf::from(filename));
+    app.main();
+}

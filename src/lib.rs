@@ -25,7 +25,7 @@ use egglog::prelude::{add_base_sort, RustSpan, Span};
 pub use egglog::*;
 use std::sync::Arc;
 
-pub mod canonical_phase_poly;
+pub mod engine;
 pub mod rational;
 pub use rational::*;
 mod scheduling;
@@ -41,11 +41,8 @@ pub use size::*;
 
 // Sugar modules using parse-time macros
 pub mod bridge;
-mod evaluator;
-mod reduction;
 mod sugar;
-pub mod app;
-mod continuous_poly;
+// pub mod app; // Temporarily disabled to focus on core Rust library
 
 pub use sugar::*;
 
@@ -59,7 +56,8 @@ pub fn new_experimental_egraph() -> EGraph {
     add_base_sort(&mut egraph, RationalSort, span!()).unwrap();
 
     // PathSum native matrix math support
-    add_base_sort(&mut egraph, crate::bridge::PathSumSort, span!()).unwrap();
+    add_base_sort(&mut egraph, bridge::PathSumSort64, span!()).unwrap();
+    add_base_sort(&mut egraph, bridge::PathSumSort128, span!()).unwrap();
 
     // Support for set cost
     add_set_cost(&mut egraph);

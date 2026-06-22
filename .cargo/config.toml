@@ -1,3 +1,0 @@
-[build]
-# Forces Rust to keep frame pointers so profilers can unwind the stack
-rustflags = ["-C", "force-frame-pointers=yes"]
