@@ -19,4 +19,4 @@ name = "egglog_experimental"
 path = "src/lib.rs"
 
 [patch.crates-io]
-egglog = { git = "https://github.com/egraphs-good/egglog", rev = "e0129c15753c4760516d7362362f3c64e03a2d67" }
+egglog = { git = "file:///C:/Users/TomBi/IdeaProjects/egglog", rev = "e0129c15753c4760516d7362362f3c64e03a2d67" }

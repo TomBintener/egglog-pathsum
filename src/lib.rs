@@ -83,6 +83,7 @@ pub fn new_experimental_egraph() -> EGraph {
 }
 
 // Create a parser with experimental macros
+// Create a parser with experimental macros
 pub fn experimental_parser() -> Parser {
     let mut parser = Parser::default();
     parser.add_command_macro(Arc::new(sugar::For));
